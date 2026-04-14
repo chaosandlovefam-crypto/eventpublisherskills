@@ -418,3 +418,39 @@ not-staged look, shot on phone, shallow depth of field, natural candid moment.
 - Treat as a production incident. Either DELETE the broken events immediately (user permission required), or race to PATCH each with a QA'd image one by one. Stop all other work until every live card is brand-quality.
 
 **Why:** On 2026-04-14 a 23-event Danderyd batch was `POST /admin/events`-created with `images: []` intending a Phase-2 image fix. Users saw 23 broken-placeholder cards in the live feed. The user said: "ekhon app e live hajar hajar manush ki bolbe?" (what will the thousands of users say now?). This rule makes that mistake impossible in the future — Phase-2 "I'll add image later" is never acceptable for a user-facing product that competes on brand quality.
+
+## Rule #17: Source-First Image Strategy — Generate Is Fallback, Not Default
+**When:** Every event in any batch, before deciding which image to use.
+
+**Action:** Always look for and prefer the source page's existing image first. AI generation is the *fallback*, used only when the source image fails the Rule #5 family-relevance check, is text-heavy (Rule #3), or doesn't exist at all (Rule #7). Don't burn ChatGPT quota and 42-second waits on events that already had a perfectly usable source photo.
+
+**Why this matters for time-to-publish:**
+- **Source path:** fetch image from source URL → upload to `/admin/image` → POST event. ~3 seconds per event, no rate limit.
+- **Generate path:** write Rule #11 prompt → send to ChatGPT → wait 42s → Rule #13 QA → upload → POST. ~50 seconds per event + every 10th event hits a 4-min cooldown.
+- **Math:** 23 events all-source = ~70 seconds total. 23 events all-generate = ~30 minutes (today's actual). The source-first default cuts batch time by 25× when source images are usable.
+
+**Robust source-image extraction (don't trust a single selector):**
+The Danderyd 2026-04-14 cut-corner happened because `main.querySelector('img')` returned null on detail pages — but the images existed in other forms. Always check, in order:
+1. `og:image` meta tag — `document.querySelector('meta[property="og:image"]')?.content`
+2. `twitter:image` meta tag — `document.querySelector('meta[name="twitter:image"]')?.content`
+3. Article-scoped large `<img>` — `article img, [class*="hero"] img, [class*="featured"] img` with `width >= 400` or `naturalWidth >= 400`
+4. `<picture>` `<source srcset="...">` — pick the largest URL from srcset
+5. Lazy-load attributes — `img[data-src], img[data-lazy-src], img[loading="lazy"]` — read `data-src` not `src`
+6. JSON-LD `<script type="application/ld+json">` event schema — has `image: "url"` field
+
+If any of these returns a URL, fetch it, validate (status 200, content-type image/*, byte size > 5KB so not a 1×1 tracker), then run Rule #5 quick-check.
+
+**Rule #5 quick-check on source image (3-second decision):**
+- Is it a flyer/poster (text-heavy, Rule #3 → reject)? Quick visual: lots of letters, event title overlaid → reject.
+- Is it generic (a flag, a building, an object alone, no people, no activity)? → reject.
+- Does it show humans engaged in something that matches the event's activity? → keep, use as-is.
+- When uncertain (50/50 family-friendly?) → keep (mediocre source > brand-degrading delay). Improve later if user flags.
+
+**Process for each event in a batch:**
+1. Fetch detail page HTML via `fetch(url).then(r => r.text())`.
+2. Run the 6-step extraction above.
+3. If source image found AND passes Rule #5 quick-check → use source URL → upload → POST event. Done in ~3s.
+4. Else → fall back to Rule #11 UGC generation. Document in batch report which events were source-vs-generate.
+5. After batch, report `{source: N, generated: M, total: N+M}` so user can see the source-coverage ratio.
+
+**Why:** User feedback after the Danderyd 2026-04-14 batch: "source image jodi motamutio chole ar amra jodi seguloi use kortam tahole amader timing aro kome jeto na?" (if source images were passable and we just used them, our timing would have been less, no?). Yes. The default mindset has to be source-first; generation is reserved for the cases where source genuinely fails our brand bar (text-heavy, generic, missing). Speed AND accuracy together — that's the bar.
