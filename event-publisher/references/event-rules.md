@@ -207,3 +207,85 @@ Yesterday published "Bim Bam Bom" under Vallentuna kommun. Today processing Hani
 **Why:** Famies covers 27+ Swedish cities. Many Swedish events share names (e.g., "Sommarfest", "Familjedag", "Bokcirkel") across different municipalities but are genuinely separate local events. Skipping them as duplicates would leave users in other cities without local events. City context is as important as title when determining duplicates.
 
 **Implementation Note:** Always track the "current city context" when batch-processing events from a source URL. The city/municipality of the source URL determines the city context for ALL events scraped from that source. Use this city context to compare against the venue/organizer/source URL of matching events on the dashboard.
+
+
+---
+
+## Rule #9: Image Prompt Writing Style (Authentic Nordic UGC-Style)
+
+**Context:** All images must look like authentic real Swedish/Nordic family moments — NOT cartoonish, illustrated, or studio-staged. Images should feel like a candid phone snapshot from a real Swedish home or public space.
+
+### The Required Prompt Formula (5-part structure)
+
+```
+Authentic vertical 1:1 photo of Nordic [subject] + [activity + setting] + [realism details] + [natural light] + [mood]. Real life, not staged.
+```
+
+### 5 Ingredients Explained
+
+1. **Subject** — Nordic/Scandinavian children, parents, families (specify ages, hair, skin naturally)
+2. **Activity + Setting** — concrete action in a real Swedish/Nordic environment (home kitchen, förskola, park, biblioteket, lekplats, skog)
+3. **Realism details** — slight motion blur, imperfect framing, everyday clothes, real textures, visible toys/books/snacks
+4. **Natural light** — soft window light, overcast Nordic daylight, lamp glow, golden hour through trees
+5. **Mood** — warm, calm, joyful, cozy, curious, focused — never posed or plastic
+
+### Strict DON'Ts
+
+- ❌ NO cartoon, illustration, anime, 3D render, CGI, Pixar, digital art
+- ❌ NO studio lighting, white backdrops, professional photoshoot look
+- ❌ NO overly perfect/staged compositions — must feel candid
+- ❌ NO HD/4K/8K/hyperrealistic tags — these push toward plastic look
+- ❌ NO models, stock photo aesthetic, or commercial vibes
+- ✅ ALWAYS end the prompt with "Real life, not staged."
+- ✅ ALWAYS use 1:1 aspect ratio (500x500 output) — Famies event cards are square
+- ✅ ALWAYS specify Nordic/Swedish/Scandinavian subjects
+
+### Client-Approved Sample Prompts (1:1)
+
+**1. Barnkalas (Children's party)**
+Authentic vertical 1:1 photo of Nordic children around age 5–7 at a cozy Swedish birthday party at home. Kids laughing, blowing out candles on a simple homemade cake. Balloons tied to chairs, paper plates, juice glasses, one child in a paper crown. Warm window light, slight motion blur from movement, imperfect framing. Joyful, real, candid. Real life, not staged.
+
+**2. Helgplaner (Weekend plans)**
+Authentic vertical 1:1 photo of a Nordic family of four packing a weekend bag in a bright Swedish hallway. Parents helping two kids zip jackets, one child holding a stuffed animal, rain boots by the door. Overcast Nordic daylight through the window, soft shadows. Calm, everyday energy. Real life, not staged.
+
+**3. Efter skolan (After school)**
+Authentic vertical 1:1 photo of a Nordic child age 8 at the kitchen table eating a mellanmål — yogurt with berries and a knäckebröd sandwich. Backpack on the floor, jacket on the chair. Soft afternoon light from a window, slightly messy kitchen counter in background. Quiet, tired-happy mood. Real life, not staged.
+
+**4. Enkel middag (Simple dinner)**
+Authentic vertical 1:1 photo of a Nordic family around a small wooden dining table eating pannkakor with jam. Two kids age 4 and 7, parents serving, milk glasses, a simple IKEA-style kitchen in background. Warm evening lamp light. Cozy, real, unposed. Real life, not staged.
+
+**5. Gratis aktiviteter (Free activities)**
+Authentic vertical 1:1 photo of Nordic kids age 5–9 playing at a public Swedish lekplats on an overcast day. Kids climbing the wooden play structure, one on a swing, parents chatting on a bench in the background. Jackets, rubber boots, slightly muddy ground. Natural gray daylight. Real, candid. Real life, not staged.
+
+**6. Regniga dagar (Rainy days)**
+Authentic vertical 1:1 photo of a Nordic child age 6 sitting by a rainy window inside a cozy Swedish apartment, drawing with crayons on paper. Raindrops on the glass, soft lamp light, a blanket on the sofa nearby. Calm, focused mood. Slight reflection in the window. Real life, not staged.
+
+**7. Lekplatser (Playgrounds)**
+Authentic vertical 1:1 photo of Nordic children age 3–7 on a Swedish neighborhood playground in spring. Kids in overalls, one on a slide, one digging in sand, a parent kneeling to help. Birch trees in background, soft morning light. Candid, joyful, real. Real life, not staged.
+
+**8. Utflykter nära (Nearby outings)**
+Authentic vertical 1:1 photo of a Nordic family walking on a forest path in the Swedish countryside. Two kids age 4 and 8 ahead of parents, one holding a stick, autumn leaves on the ground. Soft dappled sunlight through birch and pine trees. Peaceful, adventurous mood. Real life, not staged.
+
+**9. Lov (School holidays)**
+Authentic vertical 1:1 photo of Nordic siblings age 5 and 9 in pajamas on a Swedish living room floor, building a pillow fort with blankets from the sofa. Morning light through the window, toys scattered, parent reading in background. Relaxed, playful. Real life, not staged.
+
+**10. Aktiviteter (Activities)**
+Authentic vertical 1:1 photo of a Nordic child age 7 at a Swedish kommun-run pottery workshop, hands muddy with clay, focused on shaping a bowl. Other kids working in soft background blur, wooden tables, warm overhead light. Curious, immersive mood. Real life, not staged.
+
+**11. Orkar inte planera (Can't be bothered to plan)**
+Authentic vertical 1:1 photo of a Nordic parent age 35 on a Swedish living room sofa with a tired smile, two young kids age 3 and 6 climbing on them with a picture book. Messy blankets, a cup of kaffe on the side table. Soft evening light. Warm, imperfect, real. Real life, not staged.
+
+**12. Vardagsvinster (Everyday wins)**
+Authentic vertical 1:1 photo of a Nordic child age 4 proudly holding up a drawing to a parent in a Swedish kitchen. Parent kneeling, smiling, fridge covered in other drawings and magnets in background. Afternoon light. Tender, authentic moment. Real life, not staged.
+
+### Adaptation Examples (applying the formula to Famies events)
+
+**Event: Sagostund på biblioteket**
+`Authentic vertical 1:1 photo of Nordic children age 3–5 sitting cross-legged on a colorful rug at a Swedish public library storytime. A librarian reading a picture book, kids watching intently, one with thumb in mouth. Soft indoor library light, bookshelves in background. Calm, curious mood. Real life, not staged.`
+
+**Event: Pianokurs för nybörjare**
+`Authentic vertical 1:1 photo of a Nordic child age 8 at an upright piano in a Swedish music school room, concentrated, small hands on the keys. Sheet music on the stand, wooden floor, natural daylight from a window. Focused, gentle mood. Real life, not staged.`
+
+### Why This Rule Matters
+
+Famies is a brand built on **real Swedish family life**. Users scroll the app to find events for their real kids — the images must feel like something a Swedish parent would actually photograph, not a stock illustration or a commercial shoot. Authentic UGC-style Nordic images drive trust, engagement, and conversion. Any cartoon/illustrated/staged image breaks the brand feel and must be regenerated.
