@@ -482,29 +482,71 @@ At end of batch, report: `{fbCandidates: N, futureValid: F, expiredSkipped: E, a
 
 **Why:** User feedback 2026-04-14: "facebook source hole date check er bepare extra care thaka — fb events kintu maximum expired old hoy" (Facebook events are mostly expired/old, take extra care on date checking). FB Page Events sections are organic dumps from the last several years — without strict date validation, half the published events could be 2-year-old festivals that no one can attend. This rule makes that mistake structurally impossible.
 
-## Rule #19: Source-Minimum Threshold — 5 Unique Events or Skip the Source
+## Rule #19: Source-Minimum Threshold — 3 Unique Events or Skip the Source
 **When:** Evaluating any source URL (kommun website, Facebook Page Events, Tickster, Eventbrite, library calendar, etc.) for a city batch.
 
-**Action:** If a source yields fewer than **5 unique events** (after Rule #4 family-relevance filter, Rule #18 expired-date filter, and Rule #12 dedup against already-published) for the same city, do NOT publish from that source in this batch. Flag the source as "low-value for `<city>`" and remove from the active source list for that city.
+**Action:** If a source yields fewer than **3 unique events** (after Rule #4 family-relevance filter, Rule #18 expired-date filter, and Rule #12 dedup against already-published) for the same city, do NOT publish from that source in this batch. Flag the source as "low-value for `<city>`" and remove from the active source list for that city.
 
 **Why this matters:**
-- Sources with 1-4 unique events cost roughly the same scrape + dedup + image-decision overhead per source as sources with 50 events — but yield 10x less.
+- Sources with 1-2 unique events cost roughly the same scrape + dedup + image-decision overhead per source as sources with 50 events — but yield 10x less.
 - Each tiny-yield source still requires its own Rule #15 integrity-check, Rule #17 image extraction, Rule #14 audit footprint. Net cost > net value.
 - Better to invest that time on a high-yield primary source (e.g. the kommun's own evenemang page often returns 20-50+ unique events).
 
 **Process:**
 1. For a candidate source URL, run the full extraction + Rule #4 + Rule #18 + Rule #12 dedup pipeline.
 2. Count `uniqueEventsAfterDedup`.
-3. If `uniqueEventsAfterDedup < 5`:
+3. If `uniqueEventsAfterDedup < 3`:
    - DO NOT publish any of them in this session, even though they passed all other rules.
    - If any were already published in error before this rule was checked, DELETE them.
    - Add the source to the city's "low-value sources" log: `{city, source, uniqueCount, checkedDate}`.
    - Re-evaluate the source ONLY when the city's primary source coverage feels stale (e.g. monthly).
-4. If `uniqueEventsAfterDedup >= 5`:
+4. If `uniqueEventsAfterDedup >= 3`:
    - Proceed with full Rule #16 publish flow.
    - Source remains active for this city.
 
 **Active source list maintenance:**
-Every city has a primary source list (e.g. `danderyd.se/evenemang`, `bibliotek.danderyd.se/evenemang`). Secondary sources (FB Pages, Tickster organizers, Eventbrite organizers) get added only when they pass the 5-unique threshold. Sources that fail the threshold get parked in `low-value-sources.md` (or equivalent) with the date checked, so we don't waste time re-checking them every batch.
+Every city has a primary source list (e.g. `danderyd.se/evenemang`, `bibliotek.danderyd.se/evenemang`). Secondary sources (FB Pages, Tickster organizers, Eventbrite organizers) get added only when they pass the 3-unique threshold. Sources that fail the threshold get parked in `low-value-sources.md` (or equivalent) with the date checked, so we don't waste time re-checking them every batch.
 
-**Why:** User decision 2026-04-14: "shono ekta source theke amra jodi minimum 5ta unique events na pai tahole seta amader source list theke amra remove kore dibo" (if a source doesn't give us minimum 5 unique events, we'll remove it from our source list). Confirmed live the same day on Danderyds kommun: FB page yielded 1 unique, Tickster yielded 0 unique (1 was a duplicate of an already-published kommun event). Both removed from the Danderyd active source list. Rule prevents low-yield rabbit-holes from eating batch time that should go to high-yield primary sources.
+**Why:** User decision 2026-04-14: original threshold was set to 5, then revised same day to 3 — softer threshold lets in genuinely useful niche sources (church calendars, hotel events, small clubs) that bring 3-4 unique additions per batch, while still filtering out 0-2-yield rabbit-holes. Confirmed live the same day on Danderyds kommun: FB page yielded 1 unique, Tickster yielded 0 unique (1 was a duplicate of an already-published kommun event). Both removed from the Danderyd active source list. Rule prevents low-yield rabbit-holes from eating batch time that should go to high-yield primary sources.
+
+## Rule #20: Hybrid Image Policy — 60% Brand-Quality Gate (Per-Event Decision, Never Batch-All)
+**When:** Preparing the image for ANY event during publish. This rule governs the single binary choice for each event: use the source image, or generate a new one via ChatGPT.
+
+**Core principle:** NEVER decide "all source" or "all generate" for a whole batch. Each event gets its own per-image quality verdict. The bar is a **60% Famies brand-quality floor**: if the source image meets ≥60% of our quality criteria, use it. Below that, generate. This keeps batches fast (source images are free + instant) without sacrificing the feed's visual standard.
+
+**The 60% brand-quality checklist (source image passes if 3 of 5 anchors are green):**
+
+| # | Anchor | Green (pass) | Red (fail) |
+|---|---|---|---|
+| 1 | **Human presence** | Shows kids, parents, or families engaging with the activity | Only scenery, object, logo, flag, empty stage, or abstract graphic |
+| 2 | **1:1 croppability** | Subject stays intact when center-cropped to a square | Subject sits on the edge / wide panoramic where 1:1 kills the story |
+| 3 | **No dominant text** | Text is absent, tiny, or a small watermark only | Event title, date, or poster text covers >20% of the frame (Rule #3) |
+| 4 | **Photographic realism** | Real photo (even if stylized) | Cartoon/illustration/clip-art/stock-graphic that feels synthetic |
+| 5 | **Topic legibility** | A parent scrolling the feed can tell what the event is about in <1s | Ambiguous crop, blurry, dark, or topic unclear |
+
+**Decision flow per event:**
+1. Extract the source image following Rule #17 (og:image → twitter:image → article img → picture srcset → data-src → JSON-LD).
+2. Score it against the 5 anchors above. Count greens.
+3. If greens ≥ 3 → **USE THE SOURCE IMAGE** (upload directly, no ChatGPT call).
+4. If greens < 3 → **GENERATE** via ChatGPT using Rule #11 UGC formula.
+5. Log the verdict per event: `{eventId, decision: "source"|"generated", greens: N, failedAnchors: [...]}`.
+
+**Expected batch mix (healthy distribution):**
+- On a typical Swedish kommun/library/culture source: ~**60-80% of events should be "source"** verdicts, ~20-40% should be "generated".
+- If a batch lands at **100% source** → STOP. You probably skipped the quality check. Re-audit.
+- If a batch lands at **100% generated** → STOP. You probably skipped source extraction or over-rejected. Re-audit.
+- Both extremes are red flags for a broken decision loop.
+
+**Integration with existing image rules:**
+- **Rule #3 (text-heavy)** → automatic fail on anchor #3 → generate.
+- **Rule #5 (audience-targeted)** → anchor #1; if no humans at all and the topic doesn't carry itself, generate.
+- **Rule #7 (no image provided)** → source = 0 greens → generate.
+- **Rule #13 (post-gen QA)** still applies to every generated image before upload.
+- **Rule #17 (source-first)** still governs extraction; this rule governs evaluation after extraction.
+
+**Anti-patterns (what we are correcting):**
+- "I'll just generate all 23 for consistency" → wastes 23 × ~30s ChatGPT quota for events where a perfectly good source image already existed (Danderyd 2026-04-14 mistake).
+- "I'll use all source to be fast" → ships the feed with 4 poster-flyers and 3 lone-flag photos that fail Rule #5 (prior Haninge-era mistake).
+- "Source looked okay-ish, good enough" without checking the 5 anchors → subjective and drifts batch to batch.
+
+**Why:** User feedback 2026-04-14: "jodi clear hoi etar jonno rule #20 create kore naw" — after seeing me alternate between 100% source (fast but uneven quality) and 100% generate (consistent but slow + low authenticity). The 60% gate + 5-anchor checklist makes the decision mechanical and repeatable. Per 100 events the target becomes ~70 source uploads (authentic, fast, free quota) + ~30 generated (quality rescues). That's the sweet spot between speed and brand quality — and it stays consistent across sessions because the rule is written down, not vibes-based.
