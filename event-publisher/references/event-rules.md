@@ -454,3 +454,57 @@ If any of these returns a URL, fetch it, validate (status 200, content-type imag
 5. After batch, report `{source: N, generated: M, total: N+M}` so user can see the source-coverage ratio.
 
 **Why:** User feedback after the Danderyd 2026-04-14 batch: "source image jodi motamutio chole ar amra jodi seguloi use kortam tahole amader timing aro kome jeto na?" (if source images were passable and we just used them, our timing would have been less, no?). Yes. The default mindset has to be source-first; generation is reserved for the cases where source genuinely fails our brand bar (text-heavy, generic, missing). Speed AND accuracy together — that's the bar.
+
+## Rule #18: Facebook-Source Date Validation (Most FB Events Are Expired)
+**When:** The source for an event is a Facebook Page's `/events` listing, an FB event detail URL, or any Facebook scrape.
+
+**Action:** Treat every Facebook-sourced event as PROBABLY EXPIRED until proven otherwise by date. Facebook page Events sections accumulate years of past events that show up alongside upcoming ones — easy to publish a 2-year-old event by accident if dates aren't checked carefully.
+
+**Process:**
+1. For every FB-source event, locate the start date with multiple fallbacks:
+   - Visible `<time>` element with `datetime` attribute (ISO format, most reliable)
+   - JSON-LD `<script type="application/ld+json">` event schema → `startDate`
+   - `og:event:start_time` meta tag (legacy)
+   - Visible Swedish-format date string ("13 april 2026", "lör 25 jun") — parse to ISO carefully (Swedish month names: jan/feb/mar/apr/maj/jun/jul/aug/sep/okt/nov/dec)
+2. Compare `startDate >= today` (use `Date.now()` server time). If start date is in the past, **SKIP — do not publish**.
+3. If date is ambiguous or unparseable, treat as expired and skip — never guess "probably this year". Better to miss a real event than publish a 2-year-old one.
+4. For recurring FB events with a series of dates, only keep the dates that are `>= today`. Drop past occurrences before applying Rule #2 (single event with multiple date ranges).
+5. Also reject events where the FB "Past" / "Tidigare" tab is the source — only scrape from "Upcoming" / "Kommande" / current tab.
+
+**FB-specific extraction quirks:**
+- FB lazy-loads event cards on scroll — scroll the events list to bottom before scraping to capture all upcoming events.
+- Date format on FB Sweden often appears as "lör 25 jun kl. 18:00" (day-of-week + day + month + time). Parse carefully — short month names need a Swedish-month-to-number map.
+- FB may show "Idag kl. 18:00" (Today at 18:00) or "Imorgon kl. 14:00" (Tomorrow). Resolve these to absolute dates using current date.
+- FB events without any visible date are usually past or cancelled — skip.
+
+**Report standard for FB batches:**
+At end of batch, report: `{fbCandidates: N, futureValid: F, expiredSkipped: E, alreadyPublished: A, newPublished: P}`. The `expiredSkipped` count tells the user how many old events FB was about to slip past us.
+
+**Why:** User feedback 2026-04-14: "facebook source hole date check er bepare extra care thaka — fb events kintu maximum expired old hoy" (Facebook events are mostly expired/old, take extra care on date checking). FB Page Events sections are organic dumps from the last several years — without strict date validation, half the published events could be 2-year-old festivals that no one can attend. This rule makes that mistake structurally impossible.
+
+## Rule #19: Source-Minimum Threshold — 5 Unique Events or Skip the Source
+**When:** Evaluating any source URL (kommun website, Facebook Page Events, Tickster, Eventbrite, library calendar, etc.) for a city batch.
+
+**Action:** If a source yields fewer than **5 unique events** (after Rule #4 family-relevance filter, Rule #18 expired-date filter, and Rule #12 dedup against already-published) for the same city, do NOT publish from that source in this batch. Flag the source as "low-value for `<city>`" and remove from the active source list for that city.
+
+**Why this matters:**
+- Sources with 1-4 unique events cost roughly the same scrape + dedup + image-decision overhead per source as sources with 50 events — but yield 10x less.
+- Each tiny-yield source still requires its own Rule #15 integrity-check, Rule #17 image extraction, Rule #14 audit footprint. Net cost > net value.
+- Better to invest that time on a high-yield primary source (e.g. the kommun's own evenemang page often returns 20-50+ unique events).
+
+**Process:**
+1. For a candidate source URL, run the full extraction + Rule #4 + Rule #18 + Rule #12 dedup pipeline.
+2. Count `uniqueEventsAfterDedup`.
+3. If `uniqueEventsAfterDedup < 5`:
+   - DO NOT publish any of them in this session, even though they passed all other rules.
+   - If any were already published in error before this rule was checked, DELETE them.
+   - Add the source to the city's "low-value sources" log: `{city, source, uniqueCount, checkedDate}`.
+   - Re-evaluate the source ONLY when the city's primary source coverage feels stale (e.g. monthly).
+4. If `uniqueEventsAfterDedup >= 5`:
+   - Proceed with full Rule #16 publish flow.
+   - Source remains active for this city.
+
+**Active source list maintenance:**
+Every city has a primary source list (e.g. `danderyd.se/evenemang`, `bibliotek.danderyd.se/evenemang`). Secondary sources (FB Pages, Tickster organizers, Eventbrite organizers) get added only when they pass the 5-unique threshold. Sources that fail the threshold get parked in `low-value-sources.md` (or equivalent) with the date checked, so we don't waste time re-checking them every batch.
+
+**Why:** User decision 2026-04-14: "shono ekta source theke amra jodi minimum 5ta unique events na pai tahole seta amader source list theke amra remove kore dibo" (if a source doesn't give us minimum 5 unique events, we'll remove it from our source list). Confirmed live the same day on Danderyds kommun: FB page yielded 1 unique, Tickster yielded 0 unique (1 was a duplicate of an already-published kommun event). Both removed from the Danderyd active source list. Rule prevents low-yield rabbit-holes from eating batch time that should go to high-yield primary sources.
