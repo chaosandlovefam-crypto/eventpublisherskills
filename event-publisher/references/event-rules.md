@@ -166,3 +166,44 @@ authentic vertical 1:1 photo of Nordic children/families [engaging with the even
 - Never publish an event without an image — always generate one if missing
 
 **Why:** Every event on Famies needs an image for the card layout. A missing image would break the UI or look unprofessional. Generating a relevant family-targeted image ensures consistent quality across all events.
+
+
+## Rule #8: City-Aware Duplicate Check (Multi-City Context)
+
+**When:** Working with event sources from multiple cities (27+ Swedish municipalities). A single event title may exist on the dashboard but belong to a DIFFERENT city than the one currently being processed.
+
+**Action:** Before skipping an event as a "duplicate", verify the existing event belongs to the SAME city as the one being published. If it's from a different city, it is NOT a duplicate — publish the new event.
+
+**The Problem:**
+Yesterday published "Bim Bam Bom" under Vallentuna kommun. Today processing Haninge kommun — the same event title "Bim Bam Bom" exists in Haninge too but as a DIFFERENT event (different venue, different organizer, different date). Searching the dashboard by title alone would show the Vallentuna version and incorrectly mark the Haninge event as a duplicate.
+
+**City Verification Steps:**
+1. Search the Famies dashboard by event title
+2. If no results → NOT a duplicate, proceed to publish
+3. If results found → for each matching event, check:
+   - **Venue city** (e.g., "Vallentuna bibliotek" vs "Haninge kulturhus")
+   - **Organizer** (e.g., "Kultur Vallentuna" vs "Kultur Haninge")
+   - **Source URL / CTA link** (vallentuna.se vs haninge.se)
+4. If ALL matching events are from DIFFERENT cities → NOT a duplicate, publish the new event
+5. If ANY matching event is from the SAME city → IS a duplicate, SKIP
+
+**Examples:**
+
+**Scenario A — Publish (different cities):**
+- Currently processing: "Bim Bam Bom" from haninge.se (target city: Haninge)
+- Dashboard search shows: "Bim Bam Bom" under Vallentuna bibliotek, organizer "Kultur Vallentuna"
+- Decision: Different city → PUBLISH the Haninge version
+
+**Scenario B — Skip (same city):**
+- Currently processing: "Kreativt skrivande" from vallentuna.se (target city: Vallentuna)
+- Dashboard search shows: "Kreativt skrivande" under Vallentuna bibliotek
+- Decision: Same city → SKIP as duplicate
+
+**Scenario C — Publish (no match):**
+- Currently processing: "Sommarfest" from botkyrka.se
+- Dashboard search shows no results
+- Decision: Not a duplicate → PUBLISH
+
+**Why:** Famies covers 27+ Swedish cities. Many Swedish events share names (e.g., "Sommarfest", "Familjedag", "Bokcirkel") across different municipalities but are genuinely separate local events. Skipping them as duplicates would leave users in other cities without local events. City context is as important as title when determining duplicates.
+
+**Implementation Note:** Always track the "current city context" when batch-processing events from a source URL. The city/municipality of the source URL determines the city context for ALL events scraped from that source. Use this city context to compare against the venue/organizer/source URL of matching events on the dashboard.
