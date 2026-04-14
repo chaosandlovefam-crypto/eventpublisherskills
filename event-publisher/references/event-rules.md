@@ -289,3 +289,113 @@ Authentic vertical 1:1 photo of a Nordic child age 4 proudly holding up a drawin
 ### Why This Rule Matters
 
 Famies is a brand built on **real Swedish family life**. Users scroll the app to find events for their real kids — the images must feel like something a Swedish parent would actually photograph, not a stock illustration or a commercial shoot. Authentic UGC-style Nordic images drive trust, engagement, and conversion. Any cartoon/illustrated/staged image breaks the brand feel and must be regenerated.
+
+## Rule #10: Bulk Image Fix via API (Not UI Clicking)
+**When:** Many already-published events (10+) need images fixed/added/replaced. Clicking through the dashboard UI for each is slow and brittle.
+
+**Action:** Use the Famies admin API directly to upload images and PATCH events. Drive it from the ChatGPT tab (so `fetch` on the ChatGPT origin can also read generated image blobs).
+
+**The three-endpoint flow per event:**
+1. `GET https://api.famies.app/admin/events/{id}` — fetch the full event so you can PATCH with the complete body
+2. `POST https://api.famies.app/admin/image` with `multipart/form-data` `file=…` — returns `{data: {image: "https://fammap-storage.s3…/event/…webp"}}`
+3. `PATCH https://api.famies.app/admin/events/{id}` with the full body + `images: [s3Url]`
+
+All three need headers: `Authorization: Bearer <JWT>`, `Platform: web`, `Version: 0.0.0`.
+
+**PATCH body must include ALL of these** (partial body = 400):
+`placeId, title, description, images, lat, lng, address, isFree, parentMinAge, parentMaxAge, childMinAge, childMaxAge, ctaLink, ctaText, dates`
+
+**Why:** Publishing 67 images took ~45 minutes via API vs. an estimated 8+ hours via UI clicking, with zero page-navigation fragility. Each PATCH is independent so rate-limit or crash recovery is trivial.
+
+## Rule #11: UGC 5-Ingredient Image Prompt Formula
+**When:** Generating event images via ChatGPT. Replace or supplement the older "authentic vertical 1:1 photo of Nordic children…" template with this richer formula for brand-quality results that feel like real phone snaps, not stock photos.
+
+**Formula (all 5 ingredients in every prompt):**
+
+1. **Subject** — who (Nordic Swedish babies 0-2, preschoolers 3-5, kids 6-10, tweens 9-12, teens 13-17, family with kids of mixed ages, young adults with support needs, etc.)
+2. **Activity + Venue** — what and where, with the real Swedish place name + address where known (e.g., "at Brandbergens bibliotek", "at Vega aktivitetshus on Moränvägen")
+3. **Realism anchors** — "authentic candid 1:1 UGC phone photo, not staged, documentary style", "shot on phone, shallow depth of field, natural candid moment"
+4. **Light** — warm afternoon library light / golden evening / bright gym fluorescent / soft Nordic daylight / dim cinema glow — match the activity context
+5. **Mood** — focused study-group mood / joyful baby-rhyme mood / creative upcycling mood / competitive night-sport energy / cozy community club vibe
+
+**Template:**
+```
+Authentic candid 1:1 UGC phone photo, not staged, documentary style, of [SUBJECT]
+at [VENUE + address], [ACTIVITY details with small sensory specifics],
+[LIGHT description], [MOOD description]. 1:1 aspect ratio, authentic
+not-staged look, shot on phone, shallow depth of field, natural candid moment.
+```
+
+**Uniqueness rule:** Every event in a batch gets a unique prompt variation — swap out the activity micro-detail, lighting phrase, or mood word so two events never share a prompt. Build a per-event prompt script before generation begins, don't improvise per event.
+
+**Why:** Brand quality har manabo — the app competes with Facebook-quality imagery. Stock-photo prompts lose that bar. The UGC formula produces images that look like a real parent snapped them at the venue, which is what Famies users trust.
+
+## Rule #12: Pre-flight Deduplication (Before Generating ANY Image)
+**When:** Any batch run that will generate or attach images to events. This MUST run before a single prompt is sent to ChatGPT.
+
+**Action:** Before generating images, build a `{title, venue}` → `[eventIds]` map across the entire batch (and across all currently-published events in the same source city). Any group with 2+ events is a Rule #2 violation — **merge first, generate images second**.
+
+**Process:**
+1. Fetch all events in the source city (or the batch scope) via `GET /admin/events?search=<source>` or equivalent.
+2. Group entries by `title + address` (or `title + venueId`). Trim, lowercase for comparison.
+3. For each group with `len > 1`:
+   - Pick one primary event (earliest-dated or lowest event ID).
+   - Collect the date ranges from the other events in the group.
+   - `PATCH` the primary with `dates: [...existingDates, ...newDatesFromDuplicates]` where each new-date object uses `eventDateId: null`.
+   - Flag the other event IDs as pending-delete (surface to user for UI deletion, since delete is a prohibited action for Claude).
+4. Only AFTER the merge loop completes, begin image generation — and only on the primary events.
+
+**Why:** A 4-way duplicate like "Kryp in - Babybokstund" (Apr 29 / May 13 / May 27 / Jun 10 at Brandbergens bibliotek) pre-sep-2025 burned 3 extra ChatGPT image generations AND produced 4 rows of the same event in the app feed, which is the opposite of brand quality. One round of dedup in code upfront saves both quota and user trust.
+
+## Rule #13: Post-Generation Image QA (Before PATCH)
+**When:** An image has just been generated by ChatGPT and you are about to POST it to `/admin/image` + PATCH the event.
+
+**Action:** Visually verify the generated image matches the prompt's Subject + Activity before uploading. A generated image that shows only scenery, fog, smoke, objects, or an empty stage — with zero visible human subjects — must be regenerated with a stronger prompt. Never PATCH an event with an unchecked image.
+
+**Process:**
+1. After baseline count increments, grab the latest `estuary/content?id=file_...` URL via `__findLatestImageUrl()`.
+2. Fetch the blob. Do a lightweight check: run the image through ChatGPT in the same chat with "Does this image show humans engaged in the activity described in my prompt? Reply YES or NO only." OR decode via `createImageBitmap` + quick brightness/entropy checks for fully-flat images (fog, solid colors).
+3. If NO or the check is ambiguous: regenerate with a refined prompt that adds explicit subject-positioning cues ("one teen in front, mid-action, phone-camera focus pulling on face"). Do NOT upload/patch.
+4. Only upload + patch images that pass visual QA.
+
+**Why:** The Punkladan miss (prompt said "band + crowd + fists in air", output was an empty smoke-filled barn) shipped to production because nothing between "image generated" and "PATCH succeeded" actually *looked* at the image. Every image must be treated as Facebook-feed-quality before it goes live.
+
+## Rule #14: Post-Run Feed Audit (Before Declaring Done)
+**When:** A batch run has completed all PATCH operations and is about to be reported as "done" to the user.
+
+**Action:** Audit the live state of the events before marking the task complete. Never declare a batch finished without eyes on the rendered output.
+
+**Process:**
+1. `GET /admin/events?search=<source>` for the full set of events touched in the batch.
+2. Check:
+   - **Duplicate titles:** group by `title+venue`; any group `len > 1` is a missed Rule #2 (the batch lacked Rule #12 enforcement).
+   - **Identical images:** group by `images[0]`; any group `len > 1` means the same image is shared, breaking Rule #1.
+   - **Text-heavy / generic / empty-subject images:** fetch first image bytes, do the Rule #13 visual check on a random 10% sample.
+   - **Missing fields:** any event with null `address`, `organizer`, or `ctaLink` that shouldn't be null.
+3. Compile a report: `{passed: N, flagged: [{eventId, issue}, ...]}`.
+4. If `flagged.length > 0`, fix those issues before reporting done. Only report "done" when `flagged.length == 0`.
+
+**Why:** Yesterday's 67-event Haninge run was reported as "100% complete, all 67 events have brand-quality Nordic UGC images" — but today's spot-check by the user surfaced 4 duplicate Kryp-in events and 1 broken Punkladan image. The gap: no audit step after PATCH loop. A 2-minute automated audit would have caught both before the user had to.
+
+## Rule #15: Session-Start Integrity Check (Memory-Loss Protection)
+**When:** At the very beginning of ANY Famies-related work in a new Claude session, BEFORE taking any action on events, images, or dashboard.
+
+**Action:** Verify the skill's memory is intact. Claude has no persistent memory between sessions — this skill file IS the memory. If it's corrupted, silently stale, or partially written, the session will proceed with wrong rules and damage the app. This check catches that failure mode.
+
+**Process (run this before the first real tool call of the session):**
+1. Read `event-publisher/SKILL.md`. Parse the frontmatter `rule_count` value (e.g., `rule_count: 15`).
+2. Read `event-publisher/references/event-rules.md`. Count lines matching `^## Rule #\d+:` (e.g., `grep -c "^## Rule #" references/event-rules.md`).
+3. Compare: the grep count must equal the frontmatter `rule_count`.
+4. **If mismatch** → STOP. Do not proceed with any Famies work. Tell the user exactly:
+   > "Skill integrity check failed: frontmatter says `rule_count: N` but `event-rules.md` has `M` rule headers. I'm not going to proceed until we reconcile — pull latest from GitHub (`git pull`) or tell me which copy to trust."
+5. **If match** → confirm to the user: "Skill integrity OK — N rules loaded from event-rules.md. Starting work."
+6. Cross-check GitHub (if reachable): `curl -s https://raw.githubusercontent.com/chaosandlovefam-crypto/eventpublisherskills/main/event-publisher/SKILL.md | grep rule_count` and compare to local. If remote has a higher `rule_count` than local, user's local is stale — `git pull` before proceeding.
+
+**Whenever a new rule is learned today:**
+1. Add the new rule to `event-rules.md` in the same session.
+2. Bump `rule_count` in `SKILL.md` frontmatter by 1.
+3. Update `last_updated` in frontmatter to today's date.
+4. Commit and push to GitHub before ending the session.
+5. Rule #15 will catch any forget-to-commit next session.
+
+**Why:** Claude's context evaporates 100% between sessions. The only thing that persists is what's written to disk. A skill file is trustworthy only if it's been verified intact at session-start. This rule makes memory loss impossible to ignore — if yesterday's Rule #14 learning was saved but today's Rule #15 wasn't committed, next session's integrity check will flag "expected 15, found 14" and force a reconcile instead of silent amnesia.

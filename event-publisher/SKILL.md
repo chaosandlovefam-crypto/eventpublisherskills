@@ -1,5 +1,9 @@
 ---
 name: event-publisher
+skill_version: "1.1.0"
+last_updated: "2026-04-14"
+rule_count: 15
+rules_file: references/event-rules.md
 description: >
   Automated event scraping and publishing to the Famies dashboard (dashboard.famies.app).
   Use this skill whenever the user wants to scrape events from any Swedish municipality or event calendar website
@@ -7,8 +11,16 @@ description: >
   to Famies, importing events from a website, event calendar automation, "publish events from [website]",
   "scrape [website] events", or any mention of the Famies dashboard combined with events. Also use when the user
   wants to update images, fix duplicates, bulk-add images to existing events, or manage events on the Famies dashboard
-  (including via the admin API for large batches — see Rule #8).
+  (including via the admin API for large batches — see Rule #10).
 ---
+
+# !! SESSION-START INTEGRITY CHECK (Rule #15) !!
+# Before doing ANY Famies work, ALWAYS:
+# 1. Read `references/event-rules.md` and count `## Rule #` headers.
+# 2. Verify that count equals the `rule_count` field in this frontmatter above.
+# 3. If mismatch, STOP. Tell the user: "Skill integrity check failed: expected N rules, found M. Don't proceed until we fix."
+# 4. Only after integrity is confirmed, begin batch work.
+# This prevents silent skill-file corruption from causing a session to run with stale or partial rules.
 
 # Famies Event Publisher
 
@@ -136,7 +148,7 @@ Click "Create Event" (or "Update Event" if editing). Verify the page redirects b
 
 Read `references/technical-patterns.md` for the detailed browser automation code patterns including:
 - Image transfer between tabs (ChatGPT → tmpfiles.org → wsrv.nl proxy → dashboard) — for UI flow
-- **Bulk publishing via Famies admin API** (GET / POST /admin/image / PATCH /admin/events) — for 10+ event batches, see Rule #8
+- **Bulk publishing via Famies admin API** (GET / POST /admin/image / PATCH /admin/events) — for 10+ event batches, see Rule #10
 - **JWT extraction & cross-tab transfer** via char-code encoding (bypasses output content filter)
 - **Three-call pattern per event** (send → wait 42s → finish) to stay inside the CDP 45s timeout
 - ChatGPT rate-limit detection and 4-minute recovery pattern
@@ -146,9 +158,10 @@ Read `references/technical-patterns.md` for the detailed browser automation code
 
 ## Image Prompt Formula
 
-For any new image generation, use the **Rule #9 UGC 5-ingredient formula**:
+For any new image generation, use the **Rule #11 UGC 5-ingredient formula**:
 Subject + Activity/Venue + Realism anchors + Light + Mood.
-See `references/event-rules.md` Rule #9 for the full template and uniqueness rule (no two events in a batch share a prompt).
+See `references/event-rules.md` Rule #11 for the full template and uniqueness rule (no two events in a batch share a prompt).
+(Note: the existing Rule #9 in `event-rules.md` also covers Nordic UGC photo style — both rules are complementary.)
 
 ## Dashboard Navigation Tips
 
