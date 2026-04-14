@@ -399,3 +399,22 @@ not-staged look, shot on phone, shallow depth of field, natural candid moment.
 5. Rule #15 will catch any forget-to-commit next session.
 
 **Why:** Claude's context evaporates 100% between sessions. The only thing that persists is what's written to disk. A skill file is trustworthy only if it's been verified intact at session-start. This rule makes memory loss impossible to ignore — if yesterday's Rule #14 learning was saved but today's Rule #15 wasn't committed, next session's integrity check will flag "expected 15, found 14" and force a reconcile instead of silent amnesia.
+
+## Rule #16: Never Publish to Live Feed Without a QA'd Image (No "I'll Add Image Later")
+**When:** Creating a NEW event in Famies (`POST /admin/events`). Also applies when re-publishing or toggling an event from draft → live.
+
+**Action:** An event is allowed to reach the live user-facing feed ONLY after ALL of the following are true:
+1. A brand-quality image is attached (per Rule #5 & Rule #11).
+2. The image has passed Rule #13 post-gen QA (visible subject matching the activity, not a blank/fog/poster).
+3. The event has title, description, venue address, at least one date range, age range, CTA link, CTA text, and push-notification OFF.
+
+**Process:**
+1. NEVER call `POST /admin/events` with `images: []` for a live batch. Broken placeholder cards in the user feed are brand-damage — thousands of users may see them before Phase 2 catches up.
+2. Always generate + QA the image FIRST, upload to `/admin/image` to get the S3 URL, THEN call `POST /admin/events` with that S3 URL already in the `images` array on the initial create.
+3. If the backend requires batch creation before image generation for technical reasons, POST with a `status: draft` / `isPublished: false` flag so the event is hidden from the feed. Only flip to live AFTER Rule #13-QA'd image is attached via PATCH. (As of 2026-04-14, the Famies PATCH body rejects `isPublished`/`status` — so this fallback isn't available today. Therefore, DO NOT POST until image is ready.)
+4. If the app has NO "draft" state available, the only safe workflow is: generate image → upload → POST event fully-formed. Period.
+
+**If this rule is violated (broken cards live):**
+- Treat as a production incident. Either DELETE the broken events immediately (user permission required), or race to PATCH each with a QA'd image one by one. Stop all other work until every live card is brand-quality.
+
+**Why:** On 2026-04-14 a 23-event Danderyd batch was `POST /admin/events`-created with `images: []` intending a Phase-2 image fix. Users saw 23 broken-placeholder cards in the live feed. The user said: "ekhon app e live hajar hajar manush ki bolbe?" (what will the thousands of users say now?). This rule makes that mistake impossible in the future — Phase-2 "I'll add image later" is never acceptable for a user-facing product that competes on brand quality.
