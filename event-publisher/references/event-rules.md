@@ -550,3 +550,59 @@ Every city has a primary source list (e.g. `danderyd.se/evenemang`, `bibliotek.d
 - "Source looked okay-ish, good enough" without checking the 5 anchors → subjective and drifts batch to batch.
 
 **Why:** User feedback 2026-04-14: "jodi clear hoi etar jonno rule #20 create kore naw" — after seeing me alternate between 100% source (fast but uneven quality) and 100% generate (consistent but slow + low authenticity). The 60% gate + 5-anchor checklist makes the decision mechanical and repeatable. Per 100 events the target becomes ~70 source uploads (authentic, fast, free quota) + ~30 generated (quality rescues). That's the sweet spot between speed and brand quality — and it stays consistent across sessions because the rule is written down, not vibes-based.
+
+## Rule #21: Every Place MUST Have `municipalityId` Set — Dashboard Filter Depends On It
+**When:** Creating any new place (venue) via `POST /admin/places` during event publishing. Applies every time a new place is created, regardless of source or city.
+
+**Problem this fixes:** Places created without `municipalityId` are invisible in the dashboard's "Municipality" filter on the Events page. Events attached to such a place DO appear in the user-facing Famies app (app queries by `placeId` / lat-lng), but admins cannot find them via the dashboard's municipality dropdown. This breaks the entire operational workflow: audits, bulk fixes, city-level reviews, Rule #14 post-run audits, Rule #12 pre-flight dedup — all rely on filtering by municipality on the dashboard UI.
+
+**Action:** Every place creation body MUST include `municipalityId`. No exceptions.
+
+**Required fields on `POST /admin/places`:**
+```json
+{
+  "title": "…",
+  "organizationId": "…",
+  "municipalityId": "…",   ← MANDATORY
+  "lat": …, "lng": …, "address": "…",
+  "interestId": "…"
+}
+```
+
+**Process:**
+1. Before creating a place, look up the municipality ID:
+   - `GET https://api.famies.app/admin/municipalities?limit=100&page={N}` — paginate until found.
+   - Cache common IDs in the session for the batch. Known Stockholm region IDs:
+     - Vaxholm: `172600240455582880`
+     - Danderyd: `172600240455582858`
+     - Haninge: `172600240455582860`
+     - Stockholm, Nacka, Täby, Sollentuna, Upplands Väsby, Solna, Järfälla, Huddinge, Botkyrka, Tyresö, Värmdö, etc. — fetch on-demand when first encountered, then cache.
+2. Include `municipalityId` in the create body.
+3. Verify after create: `GET /admin/places/{placeId}` → response must show `municipality.name` matching the expected city. If it comes back null, PATCH immediately: `PATCH /admin/places/{placeId}` with body `{municipalityId: "…"}`.
+
+**Backfill fix for existing broken places:**
+```js
+// PATCH existing place to add municipality
+await fetch(`https://api.famies.app/admin/places/${placeId}`, {
+  method: 'PATCH',
+  headers: {Authorization: `Bearer ${JWT}`, Platform: 'web', Version: '0.0.0', 'Content-Type': 'application/json'},
+  body: JSON.stringify({municipalityId: '172600240455582880'})
+});
+```
+Returns `{success: true}` on success. Minimal PATCH — no other fields required.
+
+**Audit query to find broken places:**
+```js
+// Find any place with null municipality
+const places = await fetchAllPlaces();  // paginate /admin/places
+const broken = places.filter(p => !p.municipality);
+// Group by owner organization so you can guess the correct municipality
+```
+Run this audit whenever a user reports "I can't find my events on the dashboard" — it's usually a null-municipality place.
+
+**Integration with other rules:**
+- **Rule #6 (Missing Organizer/Venue → Use source website):** When falling back to the source website as venue, STILL set `municipalityId` to the source city's municipality. Don't leave it null.
+- **Rule #14 (Post-Run Feed Audit):** Add a check — `all events' place.municipality != null`. Any null → flag and PATCH before declaring done.
+- **Rule #16 (Never publish without QA'd image):** Extend the pre-publish gate to also require place.municipality != null. A venue without a municipality is an incomplete setup.
+
+**Why:** User discovery 2026-04-15 — "vaxholm ar danderyd events show korche na keno dashboard e search dewar por kintu apps e to show korteche". Root cause: 3 places (Vaxholm general venue with 27 events, Danderyds bibliotek with 23 events, plus one empty test place) were all created with `municipality: null`. App worked fine because it queries by `placeId` + lat-lng. Dashboard was broken because its Municipality filter joins through `place.municipality.municipalityId`. 50 events were invisible to admin tooling for nearly a full day. One missing field → one full batch of operational tooling broken. Making `municipalityId` mandatory + a post-create verify step prevents this from ever happening silently again.
