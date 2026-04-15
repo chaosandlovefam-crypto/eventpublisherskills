@@ -650,3 +650,61 @@ const up = await fetch('https://api.famies.app/admin/image', {
 5. Match the dashboard exactly.
 
 **Why:** User session 2026-04-15 — upload flow that worked for Vaxholm + Danderyd + Haninge ~24 hours earlier suddenly 400-ed on every attempt. 45+ minutes of dead-ends trying field names, query params, alternate endpoints — all returned the same "Folder name is not allowed for dashboard upload". Only way to unblock was capture a live dashboard UI upload via fetch/XHR interceptor, then mirror the exact payload. The fix turned out to be the filename pattern `event.jpg-{Date.now()}` plus the `Accept` header. The filename trick is intentional on the backend — it's how the service tells "same user originated dashboard upload" apart from "some other caller with the same JWT trying to write into a folder path." Without this rule documented, future sessions will repeat the 45-minute debug — or worse, silently skip the broken source and leave events unpublished.
+
+## Rule #23: City-Source Master Index (Single Source of Truth Spreadsheet)
+**When:** User mentions a Swedish city by name (e.g. "let's do Nykvarn") and expects you to know the source list without needing the URLs spelled out.
+
+**Action:** Pull the city's source URL list from the user's master spreadsheet, NOT from memory or guessing. The spreadsheet is the canonical, weekly-maintained source-of-truth.
+
+**Master spreadsheet:** `https://docs.google.com/spreadsheets/d/10LqkGw7IbEupkSeFvTjoPI8nY-4Go8Rf3YkjwP9m4bY/edit?gid=0`
+- Title: `Weekly_Events_Update`
+- Owned by: Famies (Chaos and love fam) Google account
+- Updated weekly with new sources
+
+**Sheet schema (gid=0):**
+| Col | Field |
+|-----|-------|
+| A | City Name (display label) |
+| B | Total Amount |
+| C | Last Updated |
+| D | **Source URL** (the URL to scrape) |
+| E | **City** (which city the source serves — group by this) |
+
+**How to fetch (CSV export, no auth needed if anyone-with-link):**
+```js
+const csvUrl = 'https://docs.google.com/spreadsheets/d/10LqkGw7IbEupkSeFvTjoPI8nY-4Go8Rf3YkjwP9m4bY/export?format=csv&gid=0';
+const txt = await (await fetch(csvUrl)).text();
+const rows = txt.split(/\r?\n/).map(line => {
+  const cells = []; let cur = ''; let inQ = false;
+  for (const c of line) {
+    if (c === '"') inQ = !inQ;
+    else if (c === ',' && !inQ) { cells.push(cur); cur = ''; }
+    else cur += c;
+  }
+  cells.push(cur);
+  return cells;
+});
+const byCity = {};
+rows.slice(1).forEach(r => {
+  const city = (r[4] || '').trim();
+  const url = (r[3] || '').trim();
+  if (city && url) (byCity[city] = byCity[city] || []).push(url);
+});
+window.__cityIndex = byCity;
+// Now byCity['Nykvarn'] = ['https://...', 'https://...', ...]
+```
+
+**Cities currently indexed (28 as of 2026-04-15):**
+Botkyrka, Ekerö, Haninge, Järfälla, Nacka, Nykvarn, Nynäshamn, Salem, Södertälje, Tyresö, Upplands-Bro, Vaxholm, Värmdö, Norrtälje, Uppsala, Danderyd, Lidingö, Huddinge, Sundbyberg, Solna, Vallentuna, Sollentuna, Täby, Upplands Väsby, Sigtuna, Österåker, Stockholm.
+
+**Process when user says a city name:**
+1. Run the CSV fetch above (one tool call) and cache `window.__cityIndex` for the session.
+2. Look up `__cityIndex[city]` → array of source URLs.
+3. Show the user the list briefly so they can confirm before you start the batch (do not ask them to paste URLs again).
+4. Process each source per Rules #4 / #12 / #19 / #20 / #21 / #22.
+5. After the batch, optionally PATCH the sheet's `Total Amount` (col B) for that city — but only if user asks.
+
+**If a city is NOT in the spreadsheet:**
+Tell the user "this city isn't in your master spreadsheet yet — paste the URL list once and I'll work from that for this session." Don't invent URLs.
+
+**Why:** Up to 2026-04-15 every city batch required the user to paste 10-25 URLs into chat. With this spreadsheet contract, the user can say "do Nykvarn" or "do Sigtuna" and the agent is unblocked instantly. Equally important: when the user adds a new niche source (e.g. a new bibliotek calendar, or a small kommun's youth center), they update the row once and every future session picks it up automatically — no agent retraining needed. This rule + the spreadsheet together make the city-publishing pipeline self-serve.
