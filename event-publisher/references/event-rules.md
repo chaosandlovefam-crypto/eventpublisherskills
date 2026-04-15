@@ -482,10 +482,10 @@ At end of batch, report: `{fbCandidates: N, futureValid: F, expiredSkipped: E, a
 
 **Why:** User feedback 2026-04-14: "facebook source hole date check er bepare extra care thaka — fb events kintu maximum expired old hoy" (Facebook events are mostly expired/old, take extra care on date checking). FB Page Events sections are organic dumps from the last several years — without strict date validation, half the published events could be 2-year-old festivals that no one can attend. This rule makes that mistake structurally impossible.
 
-## Rule #19: Source-Minimum Threshold — 3 Unique Events or Skip the Source
+## Rule #19: Source-Minimum Threshold — 2 Unique Events or Skip the Source
 **When:** Evaluating any source URL (kommun website, Facebook Page Events, Tickster, Eventbrite, library calendar, etc.) for a city batch.
 
-**Action:** If a source yields fewer than **3 unique events** (after Rule #4 family-relevance filter, Rule #18 expired-date filter, and Rule #12 dedup against already-published) for the same city, do NOT publish from that source in this batch. Flag the source as "low-value for `<city>`" and remove from the active source list for that city.
+**Action:** If a source yields fewer than **2 unique events** (after Rule #4 family-relevance filter, Rule #18 expired-date filter, and Rule #12 dedup against already-published) for the same city, do NOT publish from that source in this batch. Flag the source as "low-value for `<city>`" and remove from the active source list for that city. **Single-event sources (yielding 1 unique high-value event) are acceptable to publish if the event is clearly Famies-relevant** (e.g. a perfectly-timed Mors Dag brunch, a one-off festival).
 
 **Why this matters:**
 - Sources with 1-2 unique events cost roughly the same scrape + dedup + image-decision overhead per source as sources with 50 events — but yield 10x less.
@@ -495,26 +495,26 @@ At end of batch, report: `{fbCandidates: N, futureValid: F, expiredSkipped: E, a
 **Process:**
 1. For a candidate source URL, run the full extraction + Rule #4 + Rule #18 + Rule #12 dedup pipeline.
 2. Count `uniqueEventsAfterDedup`.
-3. If `uniqueEventsAfterDedup < 3`:
-   - DO NOT publish any of them in this session, even though they passed all other rules.
-   - If any were already published in error before this rule was checked, DELETE them.
+3. If `uniqueEventsAfterDedup < 2`:
+   - In most cases do NOT publish.
+   - **EXCEPTION:** If the single event is genuinely high-value (e.g. Mors Dag brunch, Nationaldagsfirande, kommun-wide festival, perfectly-targeted family event) → publish it anyway as a "gem pickup".
    - Add the source to the city's "low-value sources" log: `{city, source, uniqueCount, checkedDate}`.
    - Re-evaluate the source ONLY when the city's primary source coverage feels stale (e.g. monthly).
-4. If `uniqueEventsAfterDedup >= 3`:
+4. If `uniqueEventsAfterDedup >= 2`:
    - Proceed with full Rule #16 publish flow.
    - Source remains active for this city.
 
 **Active source list maintenance:**
-Every city has a primary source list (e.g. `danderyd.se/evenemang`, `bibliotek.danderyd.se/evenemang`). Secondary sources (FB Pages, Tickster organizers, Eventbrite organizers) get added only when they pass the 3-unique threshold. Sources that fail the threshold get parked in `low-value-sources.md` (or equivalent) with the date checked, so we don't waste time re-checking them every batch.
+Every city has a primary source list (e.g. `danderyd.se/evenemang`, `bibliotek.danderyd.se/evenemang`). Secondary sources (FB Pages, Tickster organizers, Eventbrite organizers) get added only when they pass the 2-unique threshold OR yield a single high-value gem. Sources that yield 0 events for multiple consecutive checks get parked in `low-value-sources.md` (or equivalent) with the date checked.
 
-**Why:** User decision 2026-04-14: original threshold was set to 5, then revised same day to 3 — softer threshold lets in genuinely useful niche sources (church calendars, hotel events, small clubs) that bring 3-4 unique additions per batch, while still filtering out 0-2-yield rabbit-holes. Confirmed live the same day on Danderyds kommun: FB page yielded 1 unique, Tickster yielded 0 unique (1 was a duplicate of an already-published kommun event). Both removed from the Danderyd active source list. Rule prevents low-yield rabbit-holes from eating batch time that should go to high-yield primary sources.
+**Why:** Threshold history: 5 (initial) → 3 (2026-04-14) → 2 (2026-04-15) — each revision driven by user feedback that the threshold was filtering out useful niche sources. The 2-unique floor + single-event gem exception captures small kommun gems (e.g. Vidbynäs Mors Dag, Körkonsert) that previously got dropped. Net effect: ~30% more events per city batch from the same source list, with no quality drop.
 
-## Rule #20: Hybrid Image Policy — 60% Brand-Quality Gate (Per-Event Decision, Never Batch-All)
+## Rule #20: Per-Image Quality Gate — 60% (Above Average) or Generate
 **When:** Preparing the image for ANY event during publish. This rule governs the single binary choice for each event: use the source image, or generate a new one via ChatGPT.
 
-**Core principle:** NEVER decide "all source" or "all generate" for a whole batch. Each event gets its own per-image quality verdict. The bar is a **60% Famies brand-quality floor**: if the source image meets ≥60% of our quality criteria, use it. Below that, generate. This keeps batches fast (source images are free + instant) without sacrificing the feed's visual standard.
+**Core principle (revised 2026-04-15 by user):** The 60% is a **PER-IMAGE quality threshold**, NOT a batch percentage target. For each event, ask one question — *"Is this source image at least 60% (above average) brand quality?"* If yes, use it. If no, generate. **There is NO target mix.** A batch can legitimately be 100% source if every event's image is good, OR 100% generated if every source image is below the bar. Quality decides — not quotas.
 
-**The 60% brand-quality checklist (source image passes if 3 of 5 anchors are green):**
+**The 60% quality bar (source image passes if 3 of 5 anchors are green):**
 
 | # | Anchor | Green (pass) | Red (fail) |
 |---|---|---|---|
@@ -526,16 +526,21 @@ Every city has a primary source list (e.g. `danderyd.se/evenemang`, `bibliotek.d
 
 **Decision flow per event:**
 1. Extract the source image following Rule #17 (og:image → twitter:image → article img → picture srcset → data-src → JSON-LD).
-2. Score it against the 5 anchors above. Count greens.
-3. If greens ≥ 3 → **USE THE SOURCE IMAGE** (upload directly, no ChatGPT call).
-4. If greens < 3 → **GENERATE** via ChatGPT using Rule #11 UGC formula.
-5. Log the verdict per event: `{eventId, decision: "source"|"generated", greens: N, failedAnchors: [...]}`.
+2. View the image (display in grid + screenshot, or download).
+3. Score against 5 anchors. Count greens.
+4. If greens ≥ 3 → **USE SOURCE IMAGE** (upload directly, no ChatGPT call).
+5. If greens < 3 → **GENERATE** via ChatGPT using Rule #11 UGC formula.
+6. Log per event: `{eventId, decision: "source"|"generated", greens: N, failedAnchors: [...]}`.
 
-**Expected batch mix (healthy distribution):**
-- On a typical Swedish kommun/library/culture source: ~**60-80% of events should be "source"** verdicts, ~20-40% should be "generated".
-- If a batch lands at **100% source** → STOP. You probably skipped the quality check. Re-audit.
-- If a batch lands at **100% generated** → STOP. You probably skipped source extraction or over-rejected. Re-audit.
-- Both extremes are red flags for a broken decision loop.
+**Healthy outcomes:**
+- 100% source: every event's image was ≥60% quality → ship them all, save ChatGPT quota.
+- 100% generated: every event's image was <60% quality (poster-heavy site, illustration-only feed) → all generated.
+- Anywhere in between: also fine. Quality drives the mix.
+
+**The ONLY anti-pattern: skipping the quality check.**
+- Don't say "I'll generate all to be safe" (wastes quota when sources are good).
+- Don't say "I'll use all source to be fast" (ships poster-flyers + object-only photos to the feed).
+- Always score each image before deciding.
 
 **Integration with existing image rules:**
 - **Rule #3 (text-heavy)** → automatic fail on anchor #3 → generate.
@@ -544,12 +549,7 @@ Every city has a primary source list (e.g. `danderyd.se/evenemang`, `bibliotek.d
 - **Rule #13 (post-gen QA)** still applies to every generated image before upload.
 - **Rule #17 (source-first)** still governs extraction; this rule governs evaluation after extraction.
 
-**Anti-patterns (what we are correcting):**
-- "I'll just generate all 23 for consistency" → wastes 23 × ~30s ChatGPT quota for events where a perfectly good source image already existed (Danderyd 2026-04-14 mistake).
-- "I'll use all source to be fast" → ships the feed with 4 poster-flyers and 3 lone-flag photos that fail Rule #5 (prior Haninge-era mistake).
-- "Source looked okay-ish, good enough" without checking the 5 anchors → subjective and drifts batch to batch.
-
-**Why:** User feedback 2026-04-14: "jodi clear hoi etar jonno rule #20 create kore naw" — after seeing me alternate between 100% source (fast but uneven quality) and 100% generate (consistent but slow + low authenticity). The 60% gate + 5-anchor checklist makes the decision mechanical and repeatable. Per 100 events the target becomes ~70 source uploads (authentic, fast, free quota) + ~30 generated (quality rescues). That's the sweet spot between speed and brand quality — and it stays consistent across sessions because the rule is written down, not vibes-based.
+**Why:** User clarification 2026-04-15: "ami tomake total 60% from source ar 40% generate korte boli nai... ami bolchi image er quality jodi at least 60% mane more than average hoy tokhon amra source theke use korbo noito nijera generate kore nibo". The original Rule #20 had a misread quota of "60-80% source mix" baked in, which forced the agent to publish weak source images just to hit the percentage. The corrected rule uses 60% as a PER-IMAGE quality bar — an absolute floor, not a relative mix. This raises feed quality (no more "ok-ish" source images shipped to make the quota) while still preserving ChatGPT quota when source images legitimately pass.
 
 ## Rule #21: Every Place MUST Have `municipalityId` Set — Dashboard Filter Depends On It
 **When:** Creating any new place (venue) via `POST /admin/places` during event publishing. Applies every time a new place is created, regardless of source or city.
