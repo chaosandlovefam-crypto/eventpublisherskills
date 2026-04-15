@@ -1195,6 +1195,68 @@ if (existing) {
 
 **If a duplicate is found** — reuse the existing organizationId. Do not create a second one. The Vaxholm incident (2026-04-15) created 2 "Vaxholms stad" orgs because the duplicate check was skipped; merging them later required renaming one to `[Legacy 2025]` and reconciling unique-field conflicts.
 
+### Which Fields Are Unique (2026-04-15 empirical map)
+
+Backend enforces **unique constraints** (Postgres 23505) on these organizer fields — setting one to a value already in use by another org returns `400: Query error, code 23505`:
+
+| Field | Unique? | Notes |
+|---|---|---|
+| `name` | **No** | Multiple orgs can share a name (e.g. 2 "Vaxholms stad" rows). Use duplicate pre-check to prevent this. |
+| `email` | **Yes** | `bibliotek@vallentuna.se` can only exist on one org. |
+| `website` | **Yes** | Exact-string match. `https://vallentuna.se` and `https://www.vallentuna.se/` are DIFFERENT strings — both allowed. |
+| `instagram` | **Yes** | Full URI, not handle. |
+| `facebook` | **Yes** | Full URI, not handle. |
+| `youtube` | **Yes** | Full URI. |
+| `phoneNumber` | **No** | Multiple orgs can share a switchboard (e.g. 3 Vallentuna dept orgs all use `08-587 850 00`). |
+| `avatar` | No | Same S3 URL can be used on multiple orgs (e.g. kommunvapen shared across kommun + depts). |
+
+**Implication for kommun departments (Kulturskola, Kultur, etc.):**
+- ✅ Same `avatar` (kommunvapen) + same `phoneNumber` (switchboard) across kommun + all departments — allowed.
+- ❌ Must give each department a DISTINCT `email`, `website`, `instagram`, `facebook` — or set to null.
+- **Pattern for kommun depts:** `email = [dept]@[kommun].se`, `website = https://[kommun].se/[dept-path]`, `instagram = /[kommun][dept]`, `facebook = /[kommun][dept]`. If the dept has no separate social presence, leave the social fields null rather than reusing the parent kommun's social (which is already unique-locked).
+
+### Merge Protocol — Consolidating Duplicate Organizers
+
+When you discover a duplicate organizer with real events attached (like the Vallentuna bibliotek 2025→2026 case), DO NOT just delete or orphan it. Events linked to the legacy org will show `[Legacy …]` on mobile after rename — worse UX than the duplicate. Use the migration-via-place-patch pattern:
+
+```js
+// 1. Identify old org's places + events
+const oldOrgId = '249862196908033643';
+const newOrgId = '338491071812109555';
+
+// 2. Find all places owned by old org (admin/places, filter by organization.organizationId)
+// For each place:
+
+// 3. Fetch full place body (Rule #32 — PATCH must send full state)
+const r = await fetch(`https://api.famies.app/admin/places/${placeId}`, { headers });
+const p = (await r.json()).data;
+
+// 4. PATCH the place's organizationId to point to the new org
+await fetch(`https://api.famies.app/admin/places/${placeId}`, {
+  method: 'PATCH', headers,
+  body: JSON.stringify({
+    title: p.title,
+    description: p.description || '',
+    address: p.address,
+    lat: p.lat, lng: p.lng,
+    organizationId: newOrgId,          // ← the migration
+    municipalityId: p.municipality.municipalityId,
+    interestId: p.interest.interestId,
+    isPublished: p.isPublished
+  })
+});
+
+// 5. Verify: oldOrg.metrics.totalEvents should drop; newOrg.metrics.totalEvents should rise by the same number.
+// 6. Rename old org to [Legacy YYYY] and clear its unique fields so the new org can claim them.
+```
+
+**Verification after merge:**
+- `oldOrg.metrics.totalEvents` must be 0
+- `newOrg.metrics.totalEvents` must equal old_count + existing_count
+- Mobile app shows all events under the new org's name/logo/social
+
+The Vallentuna bibliotek merge (2026-04-15) moved 46 upcoming events from legacy (Dec 2025) to the new org in a single place PATCH — zero per-event PATCH needed because events inherit organizer through place→organization.
+
 ### Logo Sourcing Protocol (1:1 centered, 250x250+)
 
 **Priority order for sourcing an organizer logo:**
@@ -1282,8 +1344,72 @@ Result: mobile app showed **blank black screen** when users tapped any event fro
 
 **Fix protocol:** this rule. Every organizer POST now runs through `validateOrganization()`. No logo, no POST.
 
+### Second Incident — Vallentuna Bibliotek Merge (2026-04-15 afternoon)
+
+While fixing the 4 kommun orgs above, a SECOND class of issue surfaced: pre-existing duplicates (`Vallentuna bibliotek` from Dec 2025 vs. `Bibliotek Vallentuna` from Apr 2026). Both were real with real events (46 + 12). Patching the new one hit 23505 on email/instagram/facebook because the legacy org owned those unique fields. Vaxholms stad had the same pattern.
+
+Lessons codified:
+1. **Always run `findExistingOrg()` before POST** — skipping it is the root cause of both incidents.
+2. **Use the Merge Protocol** (above) to move events when a duplicate is found after the fact — don't orphan events under `[Legacy …]` names.
+3. **Map of unique fields** (above table) — tells you instantly whether a 23505 is coming from email vs phone vs social, so you can fix the right field without trial-and-error PATCHing.
+
+### Avatar Preservation on PATCH (important)
+
+When fixing an organizer that already has an avatar, ALWAYS fetch current state first and reuse `current.avatar` unless you're intentionally replacing it. The PATCH protocol requires a full body — sending `avatar: null` or omitting it in a non-full PATCH will clear the logo.
+
+```js
+const current = (await (await fetch(`/admin/organizations/${id}`, {headers})).json()).data;
+const patch = { ...desiredFields, avatar: current.avatar }; // preserve existing logo
+```
+
 ### Why This Rule Exists
 
 The organizer screen is the second page users see after tapping an event. It's supposed to build trust: "this kommun is hosting, here's how to contact them, here's their website." An empty organizer screen on a "government" entity breaks that trust instantly and looks like a broken app.
 
 One complete organizer = one extra GET to the kommun's /kontakt page + one logo download. Cost: 2 minutes per organizer. Value: mobile screen renders correctly forever.
+
+---
+
+## Rule #34: Instant-Start on City-Name — NEVER Ask, Auto-Pull Sources (CRITICAL UX Rule)
+
+**When:** User says a city name — alone or with any variant like "ready for next city" + city name, "let's do Täby", "Tyresö", or just "Botkyrka tomorrow".
+
+**HARD RULE:** Do NOT ask for the event source URL. Do NOT ask "ready to proceed?" Do NOT ask "which sources should I use?" The user has explicitly stated (2026-04-15): "tumi ar jiggesh korar dorkar nai tumi e to janoi ami chai ami city name bolbo without asking tumi sob a to z handle korbe bondhu ejonnoi to eto training dewa" — translation: "don't ask me, you already know what I want; I want to say a city name and you handle A-to-Z without asking, this is why you've been given so much training."
+
+**Protocol — execute in this exact order, no confirmation prompts:**
+
+1. **Rule #15 integrity check** — verify `rule_count` frontmatter matches grep of `## Rule #` headers. If mismatch, stop.
+2. **Rule #23 spreadsheet pull** — fetch master spreadsheet CSV:
+   `https://docs.google.com/spreadsheets/d/10LqkGw7IbEupkSeFvTjoPI8nY-4Go8Rf3YkjwP9m4bY/export?format=csv&gid=0`
+   Filter rows where column 5 matches the city name (case-insensitive).
+3. **Apply source-cleanup audit (Rule #19 + source-cleanup-audit file):** keep primary kommun + bibliotek + svenska kyrkan + 1-2 main culture venues. Skip IG, evenemang.se (Cloudflare), Eventbrite, Tickster, small FB pages.
+4. **Rule #33 organizer pre-flight:** check if the kommun organizer + bibliotek organizer already exist via `findExistingOrg()`. If yes, reuse. If no, create with full validation (logo + email + phone + website + ≥1 social URI + isGov + duplicate check).
+5. **Begin scraping source #1** (primary kommun) — no announcement, no "ready?" — just go.
+6. **Process events one by one** per Step 1-7 of SKILL.md Core Workflow.
+7. **Report progress every ~10 events processed** — short summary line (published N, skipped-dup M, skipped-irrelevant K).
+
+**What NOT to say:**
+- ❌ "Which sources should I prioritize?"
+- ❌ "Ready to proceed?"
+- ❌ "Should I start with bibliotek or kommun?"
+- ❌ "Before I begin, let me confirm..."
+- ❌ "What event source URL should I use?"
+
+**What to do:**
+- ✅ Silently pull sources, silently set up orgs, silently start scraping
+- ✅ First user-visible message: batch progress (e.g. "Tyresö: 3 published, 1 skipped-dup, processing source 2/6...")
+
+**Exception — when to pause and ask:**
+- Integrity check fails (skill file corrupt)
+- Master spreadsheet fetch returns 0 sources for this city → ask "master spreadsheet e [City] er jonno source nai — add korbo?"
+- Duplicate organizer merge requires cross-organizer decision (e.g. 2 orgs each have 40+ events → user needs to pick primary)
+- ChatGPT rate-limited for >5 minutes during the batch
+- Source scraping blocked by Cloudflare/login on ALL primary sources for that city
+
+**Why this rule exists:** The user has invested significant training in this skill. Every clarification question is friction that negates that investment. They want to say a city name and walk away — come back to a done batch + summary. This rule codifies that contract.
+
+**Audit checklist for every city session:**
+- Did you ask ANY question before starting? → violation
+- Did you say "ready to proceed"? → violation
+- Did you wait for user confirmation before scraping? → violation
+- Did you pull sources from the spreadsheet without being reminded? → compliance
