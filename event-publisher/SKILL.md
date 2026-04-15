@@ -1,8 +1,8 @@
 ---
 name: event-publisher
-skill_version: "1.10.0"
+skill_version: "1.16.0"
 last_updated: "2026-04-15"
-rule_count: 23
+rule_count: 33
 rules_file: references/event-rules.md
 description: >
   Automated event scraping and publishing to the Famies dashboard (dashboard.famies.app).

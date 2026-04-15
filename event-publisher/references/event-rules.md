@@ -708,3 +708,582 @@ Botkyrka, Ekerö, Haninge, Järfälla, Nacka, Nykvarn, Nynäshamn, Salem, Söder
 Tell the user "this city isn't in your master spreadsheet yet — paste the URL list once and I'll work from that for this session." Don't invent URLs.
 
 **Why:** Up to 2026-04-15 every city batch required the user to paste 10-25 URLs into chat. With this spreadsheet contract, the user can say "do Nykvarn" or "do Sigtuna" and the agent is unblocked instantly. Equally important: when the user adds a new niche source (e.g. a new bibliotek calendar, or a small kommun's youth center), they update the row once and every future session picks it up automatically — no agent retraining needed. This rule + the spreadsheet together make the city-publishing pipeline self-serve.
+
+## Rule #24: Inclusivity Bias — When in Doubt, PUBLISH (Don't Skip)
+**When:** Evaluating any individual event for Famies relevance during scrape (replaces over-strict reading of Rule #4).
+
+**Core principle:** Default to PUBLISH. The bar to skip is now HIGH — only skip if the event is fundamentally incompatible with a family-app feed. Most adult-oriented community/cultural activities are publishable because:
+- Parents and teens regularly attend on their own.
+- Many adult-coded activities (book clubs, language cafés, philosophy talks, gardening swaps, choir, mindfulness, yoga) are family-friendly when parents bring older kids/teens, or when teens attend solo.
+- Users of the Famies app include parents 18-49 — events in that bracket are valid even if not kid-specific.
+
+**HARD-skip list (only these warrant skipping):**
+1. **Alcohol/Bar-only events** — beer tastings, wine pairing dinners, pub-only programs.
+2. **Dating/Sex/Adult content** — speed-dating, sex-positive workshops, adult-themed performances.
+3. **Gambling / casino** — poker nights, betting events.
+4. **Weapons / hunting / firearm-focused** — shooting range demos, hunting workshops.
+5. **Explicitly senior-only** — events with hard age tags like "65+", "Pensionärsföreningen members", "endast för seniorer" in the title or core description. NOT events that are merely co-organized by a senior org but open to everyone.
+6. **B2B / professional-only** — lawyer consultations, business networking gala, "endast för medlemmar".
+7. **Already published exact match** — Rule #12 dedup applies as before.
+
+**SOFT-include list (publish these even if they sound adult-leaning):**
+- Yoga, mindfulness, meditation classes (parents go, teens too)
+- Book clubs, bokcirkel (kids and teen versions OFTEN exist; even adult versions have parent attendance)
+- Language cafés, språkcafé (parents attend; kids welcome)
+- Philosophy cafés, intellectual talks (open to all ages)
+- Gardening / plant swaps / sticklingbyte (whole family activity)
+- Choir, körövning, musikkår (often mixed-age)
+- Knitting / handcraft groups, stickträff (parents bring kids; teens attend)
+- Train shows, car meets, EPA-träff (kids LOVE these)
+- Lectures / föredrag (teens and curious parents)
+- Brunch / café events at family-friendly venues (Mors Dag, Far's Dag, family brunches)
+- Anhörigträff (caregiver groups) — IF NOT explicitly tied to dementia/end-of-life care
+- Träffpunkt / community drop-in — open to all
+
+**Process:**
+1. For each candidate event, ask ONE question: *"Could a Famies user (parent 18-49 or teen 13-17) plausibly attend and find this useful?"*
+2. If YES (or maybe) → publish.
+3. If clearly NO (matches a HARD-skip list item) → skip.
+4. NEVER skip out of vibes or "feels too adult" — only skip on the 7 hard criteria.
+
+**Why:** User feedback 2026-04-15: "ektu flexible kora jay na? amader target jodi unique events ekta city er under e jodi 1000 o pai amra 1000 e valo events publish korbo... ekta city er sob manush jodi amader app e duke dekhe only 5-10ta events tahole tara ki feel korbe valo naki disappointed?" — a city-feed of 5-6 events is a poor experience. Users need 20-50+ events per city to have meaningful choice. The previous over-strict reading of Rule #4 was filtering out 60-70% of legitimate events. This rule corrects the bias: publish broadly, skip only the truly incompatible. Net effect: ~3x more events per city batch with no quality drop.
+
+## Rule #25: Never Skip a Source Without Probing It First
+**When:** Processing a city's source list from the master spreadsheet (Rule #23).
+
+**Action:** Every source URL MUST be visited at least once and scraped. Do NOT skip a source based on assumption (e.g. "Facebook always has past events", "Tickster always returns 0", "Eventbrite always returns US webinars"). Document the actual scrape result.
+
+**Process:**
+1. For each source URL in the city's list:
+   - Navigate to it (use the source tab).
+   - Wait for JS-rendered content (4-6 sec).
+   - Extract event titles + dates + venues.
+   - Run Rule #4 (skip filter), Rule #12 (dedup), Rule #18 (date validation), Rule #24 (inclusivity).
+   - Count `uniqueRelevantEvents`.
+2. Report per source: `{url, scraped: yes/no, totalEvents, uniqueRelevantEvents, sample: [...titles]}`.
+3. Only after the actual probe can a source be marked "low-yield" or skipped from THIS batch.
+
+**HARD-skip exceptions (only proven-blocked by a real check, not assumption):**
+- Cloudflare 403 page → mark as "blocked, retry later"
+- 404 / page not found → mark as "URL changed, needs update"
+- Login wall (Instagram, FB private group) → mark as "needs auth, manual"
+- Rendered HTML proven empty → mark as "no events listed"
+
+In ALL other cases — even if the source seems unpromising — visit and probe before deciding.
+
+**Why:** User caught me 2026-04-15: "arekta source naki tumi check e koro nai skip korecho kintu ei skip korar permission tomake ke diche?" — I skipped svenskakyrkan?q=Nynäshamn assuming it would be low-yield. After actually probing it (after the user pushed back), it had 6 family events including a Minimusikal "Vårboost" — a perfect Famies pick. That gold would have been lost to laziness. No source gets skipped without proof.
+
+## Rule #26: Per-City Goal — Maximum Famies-Relevant Coverage
+**When:** Setting expectations for a city batch and deciding when a batch is "complete".
+
+**Core principle:** The goal of a city batch is **maximum unique Famies-relevant events**, not a fixed quota or "top picks". For Famies users opening the app, the difference between 6 events and 25 events for their city is night and day — 6 feels broken, 25 feels alive.
+
+**Per-city minimum targets (revised 2026-04-15):**
+| City size | Population | Minimum target | Healthy range |
+|---|---|---|---|
+| XS (very small kommun) | < 20K | 10 events | 10-20 |
+| S (small kommun) | 20-50K | 15 events | 15-30 |
+| M (mid kommun) | 50-150K | 25 events | 25-60 |
+| L (large kommun) | 150K+ | 40 events | 40-100+ |
+
+If after running Rules #4 / #12 / #18 / #24 / #25 across all sources the count is BELOW the city's minimum target:
+1. Re-read each source page more carefully — look for events you may have dismissed too quickly.
+2. Apply Rule #24 inclusivity bias more aggressively.
+3. Visit any source that wasn't fully probed.
+4. If still below target after honest exhaustion, ask user for additional source URLs OR accept the gap and document why.
+
+**Anti-patterns:**
+- "I'll publish the top 5 to save time" → wrong, publish ALL relevant, even if 25
+- "This source has 10 events but I'll trim to 5 best" → wrong, publish all 10
+- "Rule #19 says <2 unique = skip" → still true, but Rule #24 expands what counts as relevant, raising most sources above the threshold
+- Ending a city batch at <10 events without explicitly auditing why
+
+**Why:** Same user feedback as Rule #24 — "amader target jodi unique events ekta city er under e jodi 1000 o pai amra 1000 e valo events publish korbo somossa nai". The Famies app's value increases superlinearly with city event density. A user who sees 25 events for their city explores the app, picks 2-3 to attend, and tells friends. A user who sees 5 events leaves. Quality matters but coverage is what makes the app feel inhabited.
+
+## Rule #27: Post-Publish Dashboard Search Verification (Don't Trust API Alone)
+**When:** Immediately after a city batch is reported "complete" — before declaring done to the user.
+
+**Action:** Verify the events are actually findable via the dashboard UI, NOT just via the admin API. The admin API can return events that the dashboard search/filter UI doesn't surface — usually because of place-municipality indexing latency, place title not matching search tokens, or other indexing gotchas.
+
+**3-step verification protocol:**
+1. **API count check** — `GET /admin/events?municipalityId=<X>` returns expected count. (We've been doing this.)
+2. **Dashboard Municipality filter check** — Go to dashboard.famies.app/events, set Municipality dropdown to the city. Confirm the count matches the API count.
+3. **Dashboard Search bar check** — In the same Events page, type the city name (e.g. "Nynäshamn") in the search bar. Confirm at least the events whose titles or venue names contain the city name appear.
+
+**If step 2 or 3 fails:**
+- Step 2 fail (Municipality filter shows 0 but API shows N): place's `municipalityId` is missing or wrong → PATCH `/admin/places/{id}` with `{municipalityId: '...'}` per Rule #21.
+- Step 3 fail (Search returns 0 even when events exist): event titles AND venue title both lack the city token. Either:
+  - Rename venue to include the city name (e.g. "Nynäshamn general venue" not just "general venue"), OR
+  - Edit a few event titles to include the city name as suffix (e.g. "Babybabbel — Nynäshamn"), OR
+  - Wait 2-5 minutes for backend indexing to catch up, then re-verify.
+
+**Important: latency window.** Newly-created events + places take ~1-3 minutes to be indexed by the dashboard search backend. If verification fails immediately after publish, wait 3 minutes and re-try BEFORE doing any patches.
+
+**Why:** User report 2026-04-15: "dashboard e search diye Nynäshamn kono event pacchi na keno? total count e to dashboard e thik e dekhacche". Initial check showed search yielded 0 even though municipality count was right. After ~5 minutes of waiting (and other UI navigation triggering re-index), the same search returned the full 14 events. Same flavor of bug as the Rule #21 municipality-null case — the data is correct via API but the dashboard UI takes time to catch up. Without this verification step in the post-publish flow, every city batch ships with a "ghost period" where the user sees a broken city in their dashboard. This rule + the explicit 3-step check + the 3-minute latency wait closes that gap.
+
+## Rule #28: Age Field Mapping — How Mobile Users See Age Labels
+**When:** Setting `parentMinAge` / `parentMaxAge` / `childMinAge` / `childMaxAge` on every event POST.
+
+**Core principle:** The 4 age fields are NOT just metadata — the mobile app converts them into a single readable label that the user sees on every event card. Wrong values = misleading label = user opens an event thinking it's for their kids and finds out it's adults-only (or vice versa). Set these correctly EVERY time.
+
+**Hard rule for parent age:**
+- `parentMinAge: 18`
+- `parentMaxAge: 100`
+- ALWAYS use 18-100 for parents. Never trim to 49 or other arbitrary cap. The Famies app determines parent display from the child age, not the parent age.
+
+**Child age → mobile display mapping (the canonical table):**
+
+| Child Min | Child Max | Mobile Display | When to use |
+|-----------|-----------|----------------|-------------|
+| 0 | 18 | **"All Ages"** | Festivals, markets, exhibitions, general community events that anyone can attend (Vikinga marknad, Nynäskalaset, Bakluckeloppis, art exhibitions) |
+| 0 | 12 | **"Max 12 Years Old"** | Kids-focused events that include babies and pre-teens (general children's workshops, family days, lekland-style events) |
+| 0 | 1 | **"Max 1 Year Old"** | Babies-only events (Babybabbel, baby reading hour, Mors Dag baby groups). Baby audiences. |
+| 0 | 2 | **"Max 2 Years Old"** | Toddler events (Bokstund 10-18 mån, baby-rhyme groups for toddlers) |
+| 3 | 5 | **"3-5 Years Old"** | Pre-school targeted (Lilla Vattenmannen for 1-5, kids dance class) |
+| 5 | 10 | **"5-10 Years Old"** | Mid-childhood specific (kids' workshops, dance class) |
+| 6 | 12 | **"6-12 Years Old"** | School-age kids (kids' theater, Familjedag verkstan) |
+| 9 | 12 | **"9-12 Years Old"** | Tween-specific (Byggkollo 9-11, Bokklubb 9-12) |
+| 13 | 18 | **"13+ Years Old"** | Teen-only (ungdomskväll, EPA-träff, Filmklubb 13-25, Bokklubb 13-16) |
+| 18 | 18 | **"18+ Years Old (Adult Only)"** | Adults only — for events where children are NOT welcome (NEVER use unless event is genuinely adult-only — Rule #4/#24 already filters most of these out before publish anyway) |
+
+**Decision rules per event:**
+1. **Babies / toddlers (0-2 yr targeted)** → `cm: 0, cM: 1` or `cm: 0, cM: 2`
+2. **Pre-school kids (3-5 yr targeted)** → `cm: 3, cM: 5`
+3. **School-age kids (6-12 yr targeted)** → `cm: 6, cM: 12` (or narrower if event specifies)
+4. **Tween / pre-teen (9-12 yr targeted)** → `cm: 9, cM: 12`
+5. **Teen-only (13-18 yr targeted)** → `cm: 13, cM: 18`
+6. **All-ages family event** (festivals, markets, exhibitions, free outdoor) → `cm: 0, cM: 18`
+7. **Parent-targeted with kids welcome** (Mindfulness, Yoga, Café, Bokcirkel adult version) → `cm: 0, cM: 18` (still all-ages — parents may bring kids)
+8. **Adult-explicit only** (rare, after Rule #24 filter) → `cm: 18, cM: 18`
+
+**Common per-source defaults:**
+- Bibliotek "Babybabbel" / "Kryp in" → 0-1 (babies)
+- Bibliotek "Bokstund 0-2" / 10-18 mån → 0-2 (toddlers)
+- Bibliotek "Sagostund från 4 år" → 3-5 or 4-7
+- Bibliotek "Bokklubb 9-12 år" → 9-12
+- Bibliotek "Bokklubb 13-16 år" / Filmklubb 13-25 → 13-18
+- Svenska kyrkan "Söndagsmässa med barnens predikohörna" → 0-18 ("All Ages")
+- Svenska kyrkan "Ungdomskväll" → 13-18
+- Svenska kyrkan "Babygrupp" / "Babymässa" → 0-1
+- Festivals (Nynäskalaset, Vikinga marknad, Skördefest) → 0-18 ("All Ages")
+- Bakluckeloppis / Klädbytardag → 0-18 ("All Ages")
+- Yoga / mindfulness for adults → 0-18 (parents welcome to bring kids)
+- EPA-träff / car meets / sports for youth → 13-18
+
+**Anti-patterns (what NOT to do):**
+- ❌ `pM: 49` — wrong, always use 100. The 18-49 cap is internal user demographic, not event filter.
+- ❌ Using `cm: 6, cM: 14` for everything — varies per event; pick the right mapping above.
+- ❌ Using `cm: 18, cM: 49` for adult events — that's a wrong field assignment; child fields shouldn't have parent-range numbers. If truly adult, use 18-18.
+- ❌ Setting random ranges like `cm: 4, cM: 11` if event doesn't specify — pick a canonical range that maps to one of the mobile labels.
+
+**Verification before publish:**
+For each event check: "Does the mapped mobile label correctly describe who this event is for?" If yes, ship. If no, adjust the child age range.
+
+**Classifier regex gotchas (when auto-classifying titles):**
+- ❌ Don't match bare `bar` — collides with Swedish `bar himmel` (open sky), `barnKUL`, `barnen`, `barnets`. Use specific tokens: `vinprovning|champagneprovning|ölprovning|whiskeyprovning|nattklubb|casino|poker`.
+- ❌ Don't match bare `kul` — collides with `barnKUL` (kids' culture).
+- ❌ Don't match bare `vuxen` (adult) — Swedish often pairs `vuxen och barn` (adult & child) which is FAMILY-friendly.
+- ✅ DO match age numbers explicitly: `9-12`, `13-16`, `0-2`, `5-10` etc.
+- ✅ DO match category words: `babybabbel`, `babykör`, `bokstund`, `sagostund`, `bokklubb`, `ungdom`, `barnkonsert`, `vinprovning`.
+
+**Retroactive fix protocol (if old events were published with wrong ages):**
+1. List all events: `GET /admin/events?limit=100&page={N}&municipalityId={X}` for each city.
+2. For each event ID: `GET /admin/events/{id}` → full body.
+3. Modify body: set `parentMinAge: 18, parentMaxAge: 100, childMinAge: <classified>, childMaxAge: <classified>`.
+4. PATCH `/admin/events/{id}` with full body INCLUDING `dates: [{eventDateId, startDate, endDate}, ...]` (PATCH 400-trap: dates need `eventDateId` for existing dates).
+5. Process in batches of ~8 in parallel. Verify success rate before next batch.
+
+**Why:** User shared the official Mobile Display mapping table 2026-04-15. Up to this point the agent was improvising (`cm:6, cM:14` for general events, `pM:49` always). The first retro-fix run wrongly tagged 18 events as Adult Only because the regex matched bare `bar` against `Under bar himmel` (= "under the open sky") and `barnKUL` (= "barn kul" = kids' culture). Refined regex + retry fixed all 18. Lesson: classifier regex must be specific to the actual adult-only signals, not English-language assumptions about Swedish words.
+
+## Rule #29: Famies Content Type Catalog — Pick the Right Type for the Job
+**When:** Adding any content to the Famies dashboard (not just the typical Event).
+
+**The Famies dashboard supports 5 content types in a strict hierarchy:**
+
+```
+Organizer (brand/company)
+  └── Venue (physical location, must belong to Organizer)
+        └── Event (scheduled activity at a Venue, with date range)
+
+Standalone (not tied to Venue):
+- Campaign (promotional announcement, Feed + Mailbox)
+- Sponsored Content (paid promotion, Feed only, supports video)
+- Article (evergreen editorial content, Feed + Mailbox)
+```
+
+**Type selection cheat-sheet:**
+
+| Use case | Content type | Why |
+|----------|--------------|-----|
+| One-off scheduled activity at a venue | **Event** | Has date + location + filters |
+| Recurring activity at a venue | **Event** with multiple date ranges (Rule #2) | Same as above |
+| Festival, market, exhibition | **Event** with date range covering full duration | Has date + location |
+| Announcement, offer, important info | **Campaign** | Persists in mailbox, has location targeting |
+| Paid promotion (advertiser, partner) | **Sponsored Content** | Higher visibility, video support |
+| News, story, evergreen tip, guide | **Article** | No date/location, persistent |
+
+**Hierarchy rules (NEVER violate):**
+1. Every Venue MUST belong to an Organizer (Rule #21 already enforces municipalityId on Place; this adds organizationId).
+2. Every Event MUST belong to a Venue (the `placeId` field).
+3. Standalone types (Campaign, Sponsored, Article) do NOT need a Venue, but DO use location/age/municipality filters.
+
+**Visibility nuances per type:**
+- **Organizer**: NOT shown standalone in app — only via venues/events/campaigns
+- **Venue**: requires `Published: ON` toggle to be visible/hostable (Rule #31 covers)
+- **Event**: visible in Feed if user matches filters
+- **Campaign**: visible in Feed AND Mailbox
+- **Sponsored**: visible in Feed only
+- **Article**: visible in Feed AND Mailbox when `Published: ON`
+
+**Field reference (high-value defaults):**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| Title | All | Required, shown in feed/list |
+| Description | All | Rich text supported |
+| Image / Images | All | Recommended; Sponsored uses Video Link if provided (overrides image) |
+| Location (lat/lng) | Event/Campaign/Sponsored | Required; used for 50km radius targeting |
+| CTA Text + CTA Link | All | MUST be both present or both absent (Rule #31) |
+| Date Range | Event/Campaign/Sponsored | Required for Event/Campaign/Sponsored |
+| Send Push Notification | Event | Defaults ON — manually OFF unless event is genuinely launch-worthy (Rule #30) |
+| Filter Parent Age | All filterable types | Default 18-100 (Rule #28) |
+| Filter Children Age | All filterable types | Per Rule #28 mapping |
+| Filter Interest Category | All filterable types | Empty = all interests |
+| Parent Gender | Campaign/Sponsored | Empty = all |
+| Municipalities | Campaign/Sponsored | Empty = all in 50km radius |
+| Published | Venue/Article | Must be ON to be visible |
+
+**When the user says "publish events" they mean Events specifically.** When they say "promote X" or "announce Y" or "make a banner for Z" — that's Campaign or Sponsored. When they say "write a guide / tip / story" — that's Article.
+
+**Why:** Up to 2026-04-15 the agent treated every request as Event creation. The Dashboard Guide PDF revealed 4 other content types with distinct purposes. Picking the wrong type wastes the affordances of the right type — e.g. a "Mors Dag tip article" published as an Event with single date doesn't surface in Mailbox like an Article would. This rule documents the type catalog so the agent picks the right vehicle for each task.
+
+## Rule #30: Push Notification Discipline — 50km Radius + Manual Override
+**When:** Creating any Event via the dashboard or admin API (Send Push Notification toggle).
+
+**Hard rules:**
+1. `Send Push Notification` defaults **ON** in the dashboard UI. The toggle MUST be manually set to OFF for any event that does NOT deserve a push.
+2. Push notifications go to users within **50 km radius** of the event location AND who match the event's filters (parent age, children age, interest category).
+3. Push fires once at event-create time. NOT on PATCH updates. NOT on adding date ranges.
+4. Recurring events (multiple dates, Rule #2) push ONCE at creation, not per occurrence.
+
+**When to KEEP push notification ON (rare — really worth disturbing parents' phones):**
+- Major one-off festival or kommun-level event (Nynäskalaset, Lucia, Nationaldagsfirande)
+- Time-sensitive opportunity (last-minute lottery for free tickets, weather-window outdoor event)
+- Genuinely unique content the user would want to know about today
+
+**When to TURN push notification OFF (the default):**
+- Recurring weekly events (Babybabbel, Bokklubb, Söndagsmässa, Yoga, Pingis)
+- Library activities (Sagostund, Bokcirkel, Klädbytardag)
+- Exhibitions (Konstutställning, museum events)
+- Adult/teen-focused activities (Filmklubb, EPA-träff, Mindfulness)
+- ANY event being bulk-published in a city batch (>5 events at once)
+- Test/draft events
+- Past-date events (shouldn't push back-dated content)
+
+**Anti-patterns (HARD MISTAKES):**
+- ❌ Bulk-publishing 50 events with push ON → spams every parent in the kommun with 50 notifications
+- ❌ Push ON for events older than today
+- ❌ Push ON for trivial recurring activities → users disable Famies notifications entirely
+- ❌ Push ON for adult-only content (Vinprovning, etc.)
+
+**API note:** When POSTing an event via `/admin/events`, omit `sendPushNotification` or set `false` to avoid pushing. The dashboard UI's default-ON toggle does NOT apply to admin API calls — but verify with the backend team before relying on this for batch jobs.
+
+**Why:** Per the Dashboard Guide (page 6): "Notifications are delivered to users within a 50 km radius of the event location" + "Enable push notifications only for important events". The default-ON dashboard toggle is a footgun for bulk publishers — a 30-event Vallentuna batch could send 30 notifications to every Vallentuna parent in 50km, leading to mass-unsubscribe. This rule makes push-OFF the default for batch work, push-ON the deliberate exception.
+
+## Rule #31: Pre-Publish Event QA Checklist (Common Mistakes Catch-All)
+**When:** Right before POSTing an event (or right before clicking "Create Event" in dashboard UI). Run through this checklist for every event.
+
+**The 8-point pre-publish checklist:**
+
+| # | Check | Failure mode |
+|---|-------|-------------|
+| 1 | **Event has at least 1 date range** (`dates: [{startDate, endDate}, …]`) | Event with no date never shows in feed |
+| 2 | **Date is in the future** (or current date is within range for ongoing) | Past events confuse users (Rule #18) |
+| 3 | **Venue has `Published: ON` AND `municipalityId` set** | Otherwise event invisible in dashboard filter (Rule #21) |
+| 4 | **Place's lat/lng are real coords** (not 0/0 or far-off) | Used for 50km push radius + map view |
+| 5 | **CTA Text + CTA Link match** — both present OR both absent | "Läs mer" button with no link = dead-end UX |
+| 6 | **CTA Link is URL-encoded** (no raw `ä`/`ö`/`å` in URI) | Backend rejects with 400 "must match format uri" (we discovered this 2026-04-15) |
+| 7 | **Child age range is per Rule #28** (NOT 18-49 in child fields, NOT random) | Mobile shows wrong label |
+| 8 | **Send Push Notification is OFF** unless the event genuinely warrants a push (Rule #30) | Spam users → unsubscribe |
+
+**Common mistakes from the Dashboard Guide PDF:**
+- ❌ Forgetting to add an event date range
+- ❌ Enabling push notifications for draft or test events
+- ❌ Using CTA Text without a CTA Link (or vice versa)
+- ❌ Applying children age filters when the event is not child-related (use 0-18 "All Ages" instead)
+- ❌ Forgetting to enable `Published` on venue (event won't surface)
+- ❌ Overlapping campaigns with conflicting messages
+- ❌ Selecting municipalities without setting a clear location
+- ❌ Using non-mobile-friendly CTA links
+
+**Pre-publish verify pattern (for batch jobs):**
+```js
+function preflightEvent(plan) {
+  const fails = [];
+  if (!plan.dates || !plan.dates.length) fails.push('no-dates');
+  if (plan.dates.some(d => new Date(d.s) < new Date()) && !plan.dates.some(d => new Date(d.e) >= new Date())) fails.push('all-past');
+  if (!plan.place || !plan.place.id) fails.push('no-place');
+  if (plan.place && (!plan.place.lat || !plan.place.lng)) fails.push('no-coords');
+  if ((plan.cta && !plan.ctaText) || (!plan.cta && plan.ctaText)) fails.push('cta-mismatch');
+  if (plan.cta && /[åäöÅÄÖ]/.test(plan.cta) && !/%C3%A4|%C3%A5|%C3%B6/i.test(plan.cta)) fails.push('cta-not-encoded');
+  if (plan.cm > 17 && plan.cM > 17 && plan.cm !== 18) fails.push('child-age-wrong');
+  if (plan.sendPush !== false) fails.push('push-not-disabled');
+  return {ok: fails.length === 0, fails, plan: plan.title};
+}
+```
+
+Run preflight on EVERY event in a batch before POSTing. Fix or skip events that fail.
+
+**Why:** Multiple bugs in 2026-04-15 work would have been prevented by a pre-publish gate: minimusikal CTA had raw `ä` (400 error), Babybabbel had wrong child age range until Rule #28 retro-fix, etc. The Dashboard Guide explicitly lists 4-5 common mistakes; this rule turns them into an enforced checklist so the batch never ships with predictable bugs.
+
+## Rule #32: Venue (Place) Integrity — NEVER Create or Leave a Venue with Empty Title / Address / Coords (CRITICAL — Mobile App Crashes)
+**When:** Creating ANY new place via `POST /admin/places` OR updating an existing one via PATCH.
+
+**Hard requirements (MUST all be satisfied — no exceptions):**
+- `title` — non-empty, real venue name (NOT "test", NOT "tmp", NOT empty string `""`)
+- `address` — non-empty, valid postal address
+- `lat` — real latitude (NOT 0)
+- `lng` — real longitude (NOT 0)
+- `organizationId` — exists in the system (referenced org is real)
+- `municipalityId` — set (Rule #21 still applies)
+- `interestId` — set
+- `isPublished: true` ONLY if all the above are valid; otherwise `false`
+
+**Pre-create gate (MANDATORY before POST /admin/places):**
+```js
+function validatePlace(plan) {
+  const fails = [];
+  if (!plan.title || !plan.title.trim()) fails.push('empty-title');
+  if (!plan.address || !plan.address.trim()) fails.push('empty-address');
+  if (!plan.lat || plan.lat === 0) fails.push('zero-lat');
+  if (!plan.lng || plan.lng === 0) fails.push('zero-lng');
+  if (!plan.organizationId) fails.push('no-orgId');
+  if (!plan.municipalityId) fails.push('no-muniId');
+  if (!plan.interestId) fails.push('no-interestId');
+  if (fails.length) throw new Error('Refusing to POST broken place: ' + fails.join(','));
+  return true;
+}
+```
+Run `validatePlace(plan)` BEFORE every `POST /admin/places`. If it throws, fix the plan; do NOT POST.
+
+**PATCH protection (this is where venues silently break):**
+When PATCHing an existing place to update one field (e.g. `municipalityId`), the backend may CLEAR other unspecified fields (this happened to Vaxholm + Danderyd places in 2026-04-15 — `address`, `lat`, `lng` got reset to empty/0 after a `municipalityId`-only PATCH). PATCH protocol:
+1. GET the existing place first.
+2. Build the PATCH body INCLUDING all critical fields: `title, address, lat, lng, organizationId, municipalityId, interestId, isPublished`.
+3. Override only the field you intend to change.
+4. POST the full body — never partial.
+
+**Daily venue audit (run at end of any session that touched places):**
+```js
+const places = await getAllPlaces();
+const broken = places.filter(p =>
+  !p.title?.trim() ||
+  !p.address?.trim() ||
+  p.lat === 0 ||
+  p.lng === 0
+);
+if (broken.length) console.error('BROKEN PLACES:', broken);
+```
+If any broken places exist, PATCH to fix OR set `isPublished: false` so the mobile app never tries to render them.
+
+**HARD-skip mobile-app crash protection:**
+If a place has `isPublished: true` AND any of (empty title, empty address, lat=0, lng=0), the mobile app will:
+- Show the venue card with no name (broken UX)
+- Possibly **crash to homepage** when user taps it (the actual incident on 2026-04-15)
+- Consume an event slot in the feed without working content
+
+If you discover such a place during ANY work — even unrelated — set `isPublished: false` immediately. Don't wait to fix everything; unpublish first, fix later.
+
+**Anti-patterns (HARD MISTAKES — these have been observed):**
+- ❌ POSTing a place to "probe the API" without a real title/address (the empty Danderyd test place from 2026-04-14)
+- ❌ Leaving lat/lng as `0/0` because the source didn't have coords — this breaks the map view AND push 50km radius
+- ❌ PATCHing only `municipalityId` and accidentally clearing address/lat/lng (the Vaxholm general venue regression)
+- ❌ Setting `isPublished: true` on places that will be filled in "later"
+- ❌ Skipping the validatePlace gate "just for this test" — every test creates a real DB row that goes live
+
+**Real-world incident report (the reason this rule exists):**
+On 2026-04-14, during early API probing for the Danderyd batch, the agent POSTed a place with `organizationId` only — no title, no address, lat/lng=0, but `isPublished: true`. The empty venue propagated to the mobile app. When the CEO opened the app to demo to investors, the home feed referenced this venue → tapping it crashed the app back to the homepage. Investor + engineer + CEO Slack thread spent multiple hours diagnosing. Root cause: Claude created a broken venue and never cleaned it up. Fix protocol: this rule. Never again.
+
+**Why:** Real production damage. Real CEO impact. Real investor visibility. The cost of one broken venue is dramatically higher than the cost of an extra validation step. validatePlace() runs in microseconds; the alternative is a multi-hour incident.
+
+---
+
+## Rule #33: Organizer (Organization) Completeness — NEVER Create an Organizer Without Logo + Contact Fields (CRITICAL — Mobile Black Screen)
+
+**Severity:** CRITICAL. Incomplete organizers render as blank black screens on the Famies mobile app when users tap them.
+
+**Schema — every organizer has these fields:**
+```
+organizationId, name, avatar, isPartnered, isGovernment,
+phoneNumber, email, website, instagram, facebook, youtube
+```
+
+**HARD REQUIREMENTS — an organizer MUST have:**
+
+1. **`name`** — non-empty, specific (not "kommun" alone; use "Nynäshamns kommun")
+2. **`avatar`** — REQUIRED. Must be **1:1 square**, **250x250 or 500x500 px minimum**. Logo should be **centered with padding** so it looks balanced on the circular mobile crop. Kommun coat-of-arms (kommunvapen) from Wikipedia Commons is the standard for government entities.
+3. **`email`** — at least one contact email (e.g., `kommun@nynashamn.se`, `info@bibliotek.se`)
+4. **`phoneNumber`** — kommun switchboard or organizer main phone (Swedish format: `08-520 680 00`)
+5. **`website`** — official website URL (https://...)
+6. **`isGovernment`** — set to `true` for kommuns, biblioteks, svenska kyrkan, state-funded entities
+7. **`isPartnered`** — `false` unless explicitly confirmed as paid Famies partner
+8. **At least ONE social:** `instagram` OR `facebook` (both preferred). **MUST be full URI** — backend validates with `format: "uri"`. Use `https://www.instagram.com/nynashamnskommun` NOT the bare handle `nynashamnskommun` (400: `/body/instagram must match format "uri"`).
+9. **`youtube`** — optional but add if kommun has an active channel
+
+**If any of the 7 required fields (name, avatar, email, phoneNumber, website, isGovernment set, ≥1 social) is missing → DO NOT create the organizer yet. Gather first, then post.**
+
+### Pre-Create Validation Gate
+
+```js
+function validateOrganization(plan) {
+  const fails = [];
+  if (!plan.name || !plan.name.trim()) fails.push('empty-name');
+  if (!plan.avatar) fails.push('no-avatar-logo');
+  if (!plan.email) fails.push('no-email');
+  if (!plan.phoneNumber) fails.push('no-phone');
+  if (!plan.website) fails.push('no-website');
+  if (plan.isGovernment === undefined || plan.isGovernment === null) fails.push('isGovernment-unset');
+  if (!plan.instagram && !plan.facebook) fails.push('no-social');
+  // URI validation — backend 400s on bare handles
+  const uriFields = ['website', 'instagram', 'facebook', 'youtube'];
+  for (const f of uriFields) {
+    if (plan[f] && !/^https?:\/\//i.test(plan[f])) fails.push(f + '-not-uri');
+  }
+  if (fails.length) throw new Error('Refusing to POST broken organization: ' + fails.join(','));
+  return true;
+}
+```
+
+Run validateOrganization() **before every POST /admin/organizations**. Never bypass, never `// TODO: fill in later`.
+
+### Duplicate-Organizer Pre-Check (MANDATORY before every POST)
+
+Backend enforces unique constraint on `(email, phoneNumber, website)` — a POST with fields matching an existing org returns `400: Query error, code 23505` (Postgres unique violation). This fails AFTER you've already wasted the image upload + form fill.
+
+**ALWAYS search first:**
+
+```js
+async function findExistingOrg(name, email, website, headers) {
+  let page = 1;
+  while (page <= 20) {
+    const r = await fetch('https://api.famies.app/admin/organizations?limit=100&page=' + page, { headers });
+    const d = await r.json();
+    const arr = d?.data?.organizations || [];
+    if (!arr.length) return null;
+    const match = arr.find(o =>
+      (name && o.name?.toLowerCase() === name.toLowerCase()) ||
+      (email && o.email === email) ||
+      (website && o.website?.replace(/\/$/,'') === website.replace(/\/$/,''))
+    );
+    if (match) return match;
+    if (arr.length < 100) return null;
+    page++;
+  }
+  return null;
+}
+
+// Usage:
+const existing = await findExistingOrg('Vaxholms stad', 'kansliet@vaxholm.se', 'https://www.vaxholm.se', headers);
+if (existing) {
+  console.log('Reuse existing org:', existing.organizationId);
+  // Use existing.organizationId; DO NOT POST a new one
+} else {
+  validateOrganization(plan);
+  // proceed with POST
+}
+```
+
+**If a duplicate is found** — reuse the existing organizationId. Do not create a second one. The Vaxholm incident (2026-04-15) created 2 "Vaxholms stad" orgs because the duplicate check was skipped; merging them later required renaming one to `[Legacy 2025]` and reconciling unique-field conflicts.
+
+### Logo Sourcing Protocol (1:1 centered, 250x250+)
+
+**Priority order for sourcing an organizer logo:**
+
+1. **Official kommun/entity website** — check favicon + "press/media kit" page; many kommuns publish their kommunvapen as PNG
+2. **Wikipedia Commons** — every Swedish kommun has a `File:[Kommun] kommunvapen.png` or `.svg` with multiple resolutions. Example: `https://upload.wikimedia.org/wikipedia/commons/thumb/.../500px-...png`. Always use ≥500px source.
+3. **Official Facebook/Instagram profile picture** — if both above fail, download the organization's FB/IG profile photo (already square).
+4. **Generate square crop with padding** — if the best available logo is non-square, pad with white/transparent background so the final image is 1:1. Logo must be **centered with ≥10% padding on all sides** so the mobile app's circular crop doesn't clip it.
+
+**After sourcing:**
+- Resize to 500x500 PNG (preferred) or 250x250 minimum
+- POST to `/admin/image` with `multipart/form-data` to get the Famies CDN URL
+- Use that URL as `avatar` value in the organizer POST
+
+**If no logo can be sourced:** DO NOT create the organizer. Either skip the event (if it's a single event) or escalate to the user for a manual logo.
+
+### Contact Info Sourcing Protocol
+
+For Swedish kommun organizers, the `/kontakt` or `/kontakta-oss` page has everything:
+
+- Email: always `kommun@[kommun].se` (e.g., `kommun@nynashamn.se`, `kommun@nykvarn.se`) — if not present, try `info@` or `[kommun]@[kommun].se`
+- Phone: main switchboard (växel), Swedish format with space groups
+- Social handles: scan the footer — every kommun has IG + FB in the footer
+
+For non-kommun organizers (bibliotek, svenska kyrkan, kulturhus, museums):
+- Bibliotek: email usually `bibliotek@[kommun].se`, phone on contact page
+- Svenska kyrkan: website always `svenskakyrkan.se/[församling]`, email + phone on the församling page
+- Museums/kulturhus: contact page + FB/IG on every public-facing site
+
+**If the source won't load** (Cloudflare, geo-block) → use the kommun's main contact page; most kulturhus are operated by kommuns anyway.
+
+### PATCH Protocol — Always Send Full Body (Same as Rule #32)
+
+When updating an organizer, the backend may clear unspecified fields. Always PATCH with the **full object** you want in the final state, not just the changed field:
+
+```js
+// ❌ WRONG — will clear email, phone, etc.
+await fetch('/admin/organizations/' + id, { method: 'PATCH', body: JSON.stringify({ avatar: newUrl }) });
+
+// ✅ RIGHT — sends full desired state
+const current = await (await fetch('/admin/organizations/' + id, { headers })).json();
+const full = { ...current.data, avatar: newUrl };
+await fetch('/admin/organizations/' + id, { method: 'PATCH', body: JSON.stringify(full) });
+```
+
+### Daily Audit Script
+
+Run this at the start of every Famies session to catch any broken organizer before it hits mobile:
+
+```js
+async function auditOrganizers(headers) {
+  const r = await fetch('https://api.famies.app/admin/organizations?limit=100&page=1', { headers });
+  const orgs = (await r.json())?.data?.organizations || [];
+  const broken = orgs.filter(o =>
+    !o.avatar || !o.email || !o.phoneNumber || !o.website ||
+    (!o.instagram && !o.facebook)
+  );
+  if (broken.length) console.warn('BROKEN ORGS:', broken.map(o => o.name));
+  return broken;
+}
+```
+
+If `broken.length > 0` → fix before creating ANY new content.
+
+### Anti-Patterns (HARD MISTAKES — these have been observed on 2026-04-14/15)
+
+- ❌ POSTing `{ name: "Nynäshamns kommun", isGovernment: false }` and nothing else — this is what caused mobile black screen
+- ❌ Using a non-square logo and letting the mobile app stretch/crop badly
+- ❌ Copying the event's venue image as the organizer logo (wrong aspect, wrong meaning)
+- ❌ Creating organizer-first and planning to "enrich later" — later never comes
+- ❌ Setting `isGovernment: false` on kommuns (disables government badge in app)
+- ❌ Using bare handles for `instagram`/`facebook`/`website` (backend requires full `https://` URI — validation error `/body/instagram must match format "uri"`)
+- ❌ POSTing a new organizer without first checking if one already exists by name/email/website (creates duplicates, then 400s on unique constraint — see Duplicate-Organizer Pre-Check above)
+
+### Real-World Incident Report (Why This Rule Exists)
+
+On 2026-04-14 to 2026-04-15, the agent created 4 kommun organizers during Danderyd/Vaxholm/Haninge/Nykvarn/Nynäshamn batches with name-only posts:
+
+- Nynäshamns kommun (340079934422680746) — no avatar, no email, no phone, no social, isGovernment: false
+- Nykvarns kommun (340017136472720526) — same
+- Vaxholms stad (339626102701982774) — had website + isGovernment, missing everything else
+- Haninge kommun (339270162144331424) — partial
+
+Result: mobile app showed **blank black screen** when users tapped any event from these organizers. The Famies CEO noticed during demo. Root cause: the agent focused on events + venues and treated organizers as "just a foreign key" — never sourced the logo or contact details.
+
+**Fix protocol:** this rule. Every organizer POST now runs through `validateOrganization()`. No logo, no POST.
+
+### Why This Rule Exists
+
+The organizer screen is the second page users see after tapping an event. It's supposed to build trust: "this kommun is hosting, here's how to contact them, here's their website." An empty organizer screen on a "government" entity breaks that trust instantly and looks like a broken app.
+
+One complete organizer = one extra GET to the kommun's /kontakt page + one logo download. Cost: 2 minutes per organizer. Value: mobile screen renders correctly forever.
