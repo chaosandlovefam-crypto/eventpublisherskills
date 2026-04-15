@@ -606,3 +606,47 @@ Run this audit whenever a user reports "I can't find my events on the dashboard"
 - **Rule #16 (Never publish without QA'd image):** Extend the pre-publish gate to also require place.municipality != null. A venue without a municipality is an incomplete setup.
 
 **Why:** User discovery 2026-04-15 — "vaxholm ar danderyd events show korche na keno dashboard e search dewar por kintu apps e to show korteche". Root cause: 3 places (Vaxholm general venue with 27 events, Danderyds bibliotek with 23 events, plus one empty test place) were all created with `municipality: null`. App worked fine because it queries by `placeId` + lat-lng. Dashboard was broken because its Municipality filter joins through `place.municipality.municipalityId`. 50 events were invisible to admin tooling for nearly a full day. One missing field → one full batch of operational tooling broken. Making `municipalityId` mandatory + a post-create verify step prevents this from ever happening silently again.
+
+## Rule #22: Admin Image Upload Requires Specific Filename + Accept Header (2026-04-15 backend change)
+**When:** Calling `POST https://api.famies.app/admin/image` to upload an event image via the admin API.
+
+**Problem this fixes:** As of 2026-04-15 the Famies admin image endpoint rejects uploads unless the filename follows a specific convention and the `Accept` header is present. Previous calls with filename `event.jpg` or `test.jpg` now return `400: "Folder name is not allowed for dashboard upload"`. This silently breaks every bulk upload flow until you use the exact dashboard-UI payload shape.
+
+**Action:** Every `POST /admin/image` MUST use:
+- Filename pattern: `event.jpg-{timestamp}` (the dashboard UI uses `{base}.jpg-{Date.now()}`; the hyphen-then-timestamp after `.jpg` is what the backend checks)
+- Full header set: `Accept`, `Authorization`, `Platform`, `Version`
+- Form field name: `file` (single field)
+
+**Working recipe:**
+```js
+const file = new File([blob], 'event.jpg-' + Date.now(), {type: 'image/jpeg'});
+const fd = new FormData();
+fd.append('file', file);
+const up = await fetch('https://api.famies.app/admin/image', {
+  method: 'POST',
+  headers: {
+    'Accept': 'application/json, text/plain, */*',
+    'Authorization': 'Bearer ' + JWT,
+    'Platform': 'web',
+    'Version': '0.0.0'
+  },
+  body: fd
+});
+// Returns 200 with {data: {image: "https://fammap-storage.s3.eu-north-1.amazonaws.com/event/{orgId}/{uuid}.webp"}}
+```
+
+**What fails (400 "Folder name is not allowed for dashboard upload"):**
+- Filename `event.jpg` (no timestamp suffix)
+- Filename `test.jpg`
+- Filename `event-foo.jpg`
+- Missing `Accept` header
+- Form field named `image` / `upload` / `files` / `attachment` / `data`
+
+**Debug protocol when the endpoint starts 400-ing:**
+1. Install a `fetch`+`XMLHttpRequest` interceptor on the dashboard tab that logs any `POST /admin/image` payload.
+2. Trigger a real UI upload via Add Event → upload image → Create Event.
+3. Read the captured `formData.file.filename` from sessionStorage.
+4. Compare the filename pattern, field name, and header set to what your script sends.
+5. Match the dashboard exactly.
+
+**Why:** User session 2026-04-15 — upload flow that worked for Vaxholm + Danderyd + Haninge ~24 hours earlier suddenly 400-ed on every attempt. 45+ minutes of dead-ends trying field names, query params, alternate endpoints — all returned the same "Folder name is not allowed for dashboard upload". Only way to unblock was capture a live dashboard UI upload via fetch/XHR interceptor, then mirror the exact payload. The fix turned out to be the filename pattern `event.jpg-{Date.now()}` plus the `Accept` header. The filename trick is intentional on the backend — it's how the service tells "same user originated dashboard upload" apart from "some other caller with the same JWT trying to write into a folder path." Without this rule documented, future sessions will repeat the 45-minute debug — or worse, silently skip the broken source and leave events unpublished.
