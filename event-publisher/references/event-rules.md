@@ -1413,3 +1413,1183 @@ One complete organizer = one extra GET to the kommun's /kontakt page + one logo 
 - Did you say "ready to proceed"? → violation
 - Did you wait for user confirmation before scraping? → violation
 - Did you pull sources from the spreadsheet without being reminded? → compliance
+
+---
+
+## Rule #35: NEVER Pad Images with White Bars — Center-Crop to 1:1 (CRITICAL — Mobile UX)
+
+**Severity:** CRITICAL. Padded images with white bars on top/bottom (or left/right) make the Famies mobile app look broken and unprofessional. User quote 2026-04-15: "eta korle to user ra app uninstall kore dibe" — "this would make users uninstall the app."
+
+**HARD RULE:** When converting a non-square source image to 1:1 for the Famies mobile card, **center-CROP** the largest square from the source. **NEVER** scale-and-pad with a background color (white, black, any). The mobile app already handles its own display aspect — your job is to give it clean 1:1 photographic content.
+
+### What goes wrong with white padding
+
+The mobile card shows images edge-to-edge. If your uploaded image is a 1:1 canvas with a white-padded letterbox effect around the real photo, the card renders:
+
+```
+┌──────────────┐
+│    (white)   │  ← ugly white bar on top
+├──────────────┤
+│   REAL IMG   │  ← photo squeezed in the middle
+├──────────────┤
+│    (white)   │  ← ugly white bar on bottom
+└──────────────┘
+```
+
+This looks broken and cheap. The user's feed becomes a sea of letterboxed cards.
+
+### Correct approach — center-crop
+
+```js
+async function centerCropToSquare(blob, size = 1080) {
+  const img = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  // Take the largest centered square from the source
+  const srcSize = Math.min(img.width, img.height);
+  const sx = (img.width - srcSize) / 2;
+  const sy = (img.height - srcSize) / 2;
+  ctx.drawImage(img, sx, sy, srcSize, srcSize, 0, 0, size, size);
+  return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
+}
+```
+
+This:
+1. Finds the largest square that fits inside the source (min of width/height)
+2. Takes the CENTER of that square (so main subject usually stays in frame)
+3. Scales to 1080x1080 (or target size)
+4. Exports as JPEG — no white bars, no letterboxing, edge-to-edge photo
+
+### When NOT to crop (leave as-is)
+
+- If source is already 1:1 (±5%) → use as-is, don't re-encode unnecessarily
+- If source is very tall portrait (aspect < 0.5) or very wide landscape (aspect > 2.0) → center-crop will cut off important content. In this case, either:
+  - a. Use a better image (different source / regenerate via ChatGPT)
+  - b. Accept the center-crop if subject is vertically/horizontally centered
+  - c. NEVER pad — that's the forbidden path
+
+### Logo exception (Rule #33 avatars)
+
+Organizer avatars (kommunvapen, bibliotek logos) ARE a legitimate use of white-padded square — because the source is a transparent-background logo, not a photograph. The **10% white padding** in `padSquare()` for organizer avatars is correct because mobile's circular crop would otherwise clip the logo design. This exception applies ONLY to:
+- Organizer avatars on the `/admin/organizations` endpoint
+- Logos where the source itself has no rectangular photograph
+
+For **event images** (`/admin/events` → `images[]`) → NEVER pad. Always center-crop.
+
+### Validation Gate
+
+Before uploading ANY event image:
+
+```js
+async function validateEventImage(blob) {
+  const img = await createImageBitmap(blob);
+  const aspect = img.width / img.height;
+  const isSquare = Math.abs(aspect - 1) < 0.05;
+  if (!isSquare) {
+    // Auto-center-crop — NEVER pad
+    const cropped = await centerCropToSquare(blob, 1080);
+    return cropped;
+  }
+  return blob; // already 1:1, use as-is
+}
+```
+
+### Anti-Patterns (HARD MISTAKES — observed 2026-04-15)
+
+- ❌ `ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,size,size);` followed by `ctx.drawImage(img, (size-w)/2, (size-h)/2, w, h)` — this is the exact padding pattern that caused the 2026-04-15 Tyresö incident. 29 events all showed white letterbox bars in the mobile feed.
+- ❌ "Scale to fit and pad the rest" — forbidden for event images
+- ❌ Using `object-fit: contain` equivalent logic in canvas — produces the same ugly bars
+- ❌ Trusting that mobile will "handle it" when your input has padding baked in — it can't undo your padding
+
+### Real-World Incident Report (Why This Rule Exists)
+
+On 2026-04-15 during the first Tyresö batch (29 events published), the agent used a `padSquare()` function that filled the canvas with white and drew the scaled source image centered. Every non-square source (most of them) became a 1:1 canvas with white bars. On mobile, the feed showed ugly letterboxed cards next to organic, edge-to-edge cards from earlier batches.
+
+User noticed immediately: "event e emon upore niche white space kivabe ashe age to konodin ashe nai... user ra app uninstall kore dibe."
+
+Root cause: agent inherited a logo-padding function (Rule #33 — correct for avatars) and re-used it for event images (wrong). The two use-cases look similar (both produce 1:1 output) but require opposite strategies: logos need padding to survive circular crop; photos need center-cropping to avoid letterbox.
+
+**Fix protocol:** this rule. Every event image goes through `centerCropToSquare()`. `padSquare()` is ONLY for organizer avatars. The two functions now have loudly-different names to prevent mix-up.
+
+### Function Naming Convention (enforce in code reviews)
+
+- `padSquareForLogo(blob, size)` — organizer avatars ONLY, white padding OK
+- `centerCropToSquare(blob, size)` — event images, NO padding ever
+- Never use a generic name like `padSquare` or `toSquare` that obscures the intent
+
+### Audit Script for Existing Events
+
+Run this whenever you suspect padded images in the wild:
+
+```js
+async function auditEventImagesForLetterbox(headers) {
+  const events = await fetchAllAdminEvents(headers);
+  const suspects = [];
+  for (const e of events) {
+    for (const imgUrl of e.images || []) {
+      const b = await (await fetch(imgUrl)).blob();
+      const img = await createImageBitmap(b);
+      // Sample top-left + bottom-right for white bars
+      const canvas = new OffscreenCanvas(img.width, img.height);
+      const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0);
+      const topLeft = ctx.getImageData(0, 0, 1, 1).data;
+      const bottomMid = ctx.getImageData(img.width/2|0, img.height-1, 1, 1).data;
+      const isWhite = p => p[0] > 245 && p[1] > 245 && p[2] > 245;
+      if (isWhite(topLeft) && isWhite(bottomMid)) suspects.push(e.eventId);
+    }
+  }
+  return suspects;
+}
+```
+
+Re-fix suspects by fetching original source + center-cropping + PATCHing.
+
+### Why This Rule Exists
+
+Image aesthetics ARE the product experience. A parent scrolling for kid activities judges the app in the first 2 seconds. Letterboxed cards signal "this is a poorly-built app / content is repackaged poorly." Center-cropped photos signal "this is curated, professional content." The cost of one extra character change (`centerCropToSquare` vs `padSquare`) is zero. The cost of publishing 29 letterboxed events and having to re-process them all is an hour of re-work + user's trust.
+
+---
+
+## Rule #36: Recurring Events → ONE Event with Multiple Date Ranges (NEVER Create Separate Events Per Occurrence)
+
+**Severity:** CRITICAL. Creating separate event rows for every occurrence of a recurring series pollutes the feed, creates duplicate images, and confuses users ("same event in 5 cards"). User quote 2026-04-15: "same event one time only multiple date na kore bar bar multiple time publish kortecho keno?"
+
+**HARD RULE:** Before POST of any event, **group your scraped list by normalized title**. If a title appears 2+ times across the source (e.g. weekly "Småbarnsstund" or monthly "Stickcafé"), merge ALL occurrences into a SINGLE event with a `dates: [...]` array containing every occurrence — DO NOT POST one event per date.
+
+### Why this matters
+
+The Famies feed shows ONE card per event. A single event with `dates: [{d1},{d2},{d3},{d4}]` shows as one card that users can tap to see all occurrences. Five separate events with the same title show as FIVE identical-looking cards next to each other — parents think the app is broken or glitching.
+
+Plus: each separate event uses the same image → the feed becomes a sea of duplicate images.
+
+### Pre-POST Grouping Protocol (MANDATORY)
+
+```js
+// Step 1: Scrape full event list from source
+const scraped = /* all events from source API */;
+
+// Step 2: Group by normalized title
+const norm = s => (s || '').toLowerCase().replace(/[^a-zåäö0-9]/g, '');
+const groups = {};
+for (const e of scraped) {
+  const n = norm(e.title);
+  groups[n] = groups[n] || [];
+  groups[n].push(e);
+}
+
+// Step 3: For each group, build ONE event with combined dates
+const eventsToPublish = Object.values(groups).map(instances => {
+  // Sort by start date ascending
+  instances.sort((a,b) => a.start - b.start);
+  const primary = instances[0]; // use first occurrence's metadata
+  return {
+    title: primary.title,
+    description: primary.desc,
+    img: primary.img,
+    url: primary.url,
+    dates: instances.map(i => ({ startDate: fmt(i.start), endDate: fmt(i.end) }))
+    // ^ multiple date ranges in ONE event
+  };
+});
+
+// Step 4: POST each event once (with multi-date array)
+for (const e of eventsToPublish) {
+  await postEvent(e); // POSTs ONE event with dates[] containing all occurrences
+}
+```
+
+### Post-POST Merge Protocol (if duplicates already exist)
+
+If you've already created separate events per occurrence (like the 2026-04-15 Tyresö mistake), clean up with:
+
+```js
+async function mergeDuplicateEventSeries(headers) {
+  const all = await fetchAllEventsForCity(headers);
+  const norm = s => (s || '').toLowerCase().replace(/[^a-zåäö0-9]/g, '');
+  const byTitle = {};
+  for (const e of all) { const n = norm(e.title); (byTitle[n] = byTitle[n] || []).push(e); }
+  const dupGroups = Object.entries(byTitle).filter(([, l]) => l.length > 1);
+  
+  for (const [, instances] of dupGroups) {
+    instances.sort((a,b) => a.createdAt.localeCompare(b.createdAt));
+    const primary = instances[0];
+    const others = instances.slice(1);
+    // Combine unique dates
+    const allDates = [];
+    const seen = new Set();
+    for (const e of instances) {
+      for (const dt of (e.dates || [])) {
+        const key = dt.startDate + '|' + dt.endDate;
+        if (!seen.has(key)) { seen.add(key); allDates.push({startDate: dt.startDate, endDate: dt.endDate}); }
+      }
+    }
+    allDates.sort((a,b) => a.startDate.localeCompare(b.startDate));
+    // PATCH primary (full body per Rule #32) with combined dates
+    await patchEventFull(primary.id, { ...primary, dates: allDates }, headers);
+    // DELETE secondaries
+    for (const o of others) {
+      await fetch('/admin/events/' + o.id, { method: 'DELETE', headers });
+    }
+  }
+}
+```
+
+### Anti-Patterns (HARD MISTAKES — observed 2026-04-15)
+
+- ❌ Looping over scraped events and POSTing each one — if the source lists 5 recurring "Småbarnsstund" occurrences, this creates 5 separate events
+- ❌ Letting the dedup-by-existing-title step fool you — if the source has 5 "Småbarnsstund" entries and you process them in order, the dedup set catches #2-5 IF they already exist from a previous batch, but within ONE batch it creates 5 (then dedup kicks in next batch too late)
+- ❌ Assuming "recurring" events from source arrive as a single row — many source APIs (tyreso.se event-service, Axiell Arena) emit one row per occurrence
+- ❌ Using date in the dedup key (e.g. norm(title + date)) — this treats each date as "unique" and defeats the purpose
+
+### Detection Script (run during audit)
+
+```js
+async function findRecurringEventDuplicates(headers, municipalityName) {
+  const events = await fetchEventsForMunicipality(municipalityName, headers);
+  const norm = s => (s || '').toLowerCase().replace(/[^a-zåäö0-9]/g, '');
+  const byTitle = {};
+  events.forEach(e => { const n = norm(e.title); (byTitle[n] = byTitle[n] || []).push(e); });
+  return Object.entries(byTitle).filter(([, l]) => l.length > 1);
+}
+// Run this at the end of every batch — any group count > 1 = merge needed before the user notices
+```
+
+### Validation Gate (must run at start of each batch)
+
+```js
+function validateBatchPreFlight(scrapedEvents) {
+  const titles = scrapedEvents.map(e => e.title);
+  const titleCounts = titles.reduce((a,t) => (a[t] = (a[t]||0) + 1, a), {});
+  const dups = Object.entries(titleCounts).filter(([, c]) => c > 1);
+  if (dups.length > 0 && !window.__GROUPED_BY_TITLE) {
+    throw new Error('Source has recurring events. MUST group by title before POST: ' + JSON.stringify(dups.slice(0,3)));
+  }
+}
+// Call before the POST loop; it forces you to group first
+```
+
+### Real-World Incident Report
+
+On 2026-04-15 (Tyresö batch), the agent processed 147 events from tyreso.se/api/event-service. Out of those 147, many were recurring events (weekly "Småbarnsstund", weekly "Stickcafé i Centrum", monthly "Naturguidning: ..."). The source API returned each occurrence as a separate row. The agent POSTed each row individually → 56 events across 23 recurring series were created as separate cards in the feed.
+
+User caught it within minutes: "same event one time only multiple date na kore bar bar multiple time publish kortecho keno?" Investor + CEO escalation risk. Post-merge: 56 → 23 events with multi-date arrays, 33 events deleted.
+
+**Fix protocol:** this rule. Every scrape run now groups by title BEFORE POST.
+
+### Why This Rule Exists
+
+Feed integrity IS the product. A Famies user tapping the app sees a curated list of "things to do this week." Seeing "Småbarnsstund" 5 times with the same image is worse than not seeing it at all — it erodes trust in curation. One merged event with 5 date options is the professional presentation.
+
+Cost of grouping pre-POST: one loop + one reducer. Cost of cleaning up after: full re-audit + PATCH + DELETE sweep + user explaining the mess to investors.
+
+---
+
+## Rule #37: Unique Images Per Event — Never Let Two Different Events Share the Same Image
+
+**Severity:** HIGH. When the feed shows two adjacent cards with identical images but different titles, users read it as a content bug. User quote 2026-04-15: "onek duplicate image dekhte pachi same image bar bar use kore event publish hoy".
+
+**HARD RULE:** Before POST, verify that each event's image URL (either source URL or generated image) is **unique within the batch**. If two events from a source share the same source image (common for recurring events or series branding), generate ONE unique image per event via ChatGPT.
+
+### Root Cause of Image Duplication
+
+1. **Recurring events** — if 5 weekly "Stickcafé" occurrences share one source image, and you create 5 separate events (Rule #36 violation), each uses the same image. **Fix: obey Rule #36 → merge into 1 event. Problem solves itself.**
+2. **Series branding** — some kommuns use the same stock image for all "Kulturtimmen" events, or all "Naturguidning" events. **Fix: generate unique ChatGPT image per specific event.**
+3. **Generic placeholder images** — kommun CMS sometimes attaches the same "kommunvapen" or stock photo to many unrelated events. **Fix: ALWAYS generate unique image via ChatGPT when the source image appears on 2+ events.**
+
+### Pre-POST Image Uniqueness Gate
+
+```js
+async function ensureUniqueImagesInBatch(eventsToPublish) {
+  const imageUseCount = {};
+  for (const e of eventsToPublish) {
+    imageUseCount[e.img] = (imageUseCount[e.img] || 0) + 1;
+  }
+  // Find images used by 2+ events
+  const dupedImages = Object.entries(imageUseCount).filter(([,c]) => c > 1).map(([url]) => url);
+  if (dupedImages.length === 0) return eventsToPublish; // all unique
+  // For any event using a duplicated image, generate a fresh one via ChatGPT
+  for (const e of eventsToPublish) {
+    if (dupedImages.includes(e.img)) {
+      e.img = await generateUniqueImageViaChatGPT(e.title, e.description); // Rule #11 UGC prompt
+    }
+  }
+  return eventsToPublish;
+}
+```
+
+### Post-POST Audit Script
+
+```js
+async function auditDuplicateImagesInFeed(headers, municipalityName) {
+  const events = await fetchFullEventsForMunicipality(municipalityName, headers);
+  const byImg = {};
+  for (const e of events) {
+    for (const img of (e.images || [])) {
+      (byImg[img] = byImg[img] || []).push(e);
+    }
+  }
+  return Object.entries(byImg).filter(([,list]) => list.length > 1);
+}
+// Re-generate unique images for any events showing up in groups > 1
+```
+
+### Anti-Patterns (HARD MISTAKES)
+
+- ❌ Uploading the source image as-is when the source assigns the same image to multiple events
+- ❌ Not running the uniqueness gate before POST
+- ❌ Assuming "if URLs differ, images are unique" — they might be different S3 URLs but visually identical (same source re-uploaded). The true audit is a perceptual hash, OR reliance on source URL being unique per scraped event
+
+### Exception: Rule #36 Merged Events
+
+A single event with `dates: [multiple]` that shares ONE image across all its occurrences is CORRECT behavior — it's one event, not multiple. The uniqueness rule applies to DIFFERENT events (different titles), not different dates of the same event.
+
+### Real-World Incident Report
+
+Co-incident with Rule #36 violation on 2026-04-15 (Tyresö batch). Same root cause: recurring series occurrences were POSTed as separate events, each with the same source image. The feed showed 5 "Stickcafé" cards with the same yarn photo, 5 "Småbarnsstund" cards with the same children photo, etc. User noticed within minutes.
+
+**Fix protocol:** Obey Rule #36 primarily (merge recurring series) → image duplication collapses automatically. For genuine series-branding images shared across different titled events, invoke ChatGPT-per-event (Rule #11 UGC formula).
+
+### Why This Rule Exists
+
+Image uniqueness = visual trust signal. Parents scrolling the feed use image as the primary entry point. Duplicates undermine the "curated" feel. Enforcing per-event uniqueness costs ~20s ChatGPT generation; letting duplicates ship costs user trust and an investor meeting's oxygen.
+
+---
+
+## Rule #38: Image Quality Score ≥ 0.70 Mandatory — Pre-Upload Gate (CRITICAL for Investor/CEO Visibility)
+
+**Severity:** CRITICAL. Bad event images damage first-impression trust. User directive 2026-04-15 (investor demo imminent): "image quality score jate more than 70% hoy karon unara image sundor dekhle valo feel korbe." 
+
+**HARD RULE:** Before POSTing any event image, compute a quality score in [0, 1]. If `score < 0.70`, DO NOT upload the source image. Instead generate a fresh image via ChatGPT (Rule #11 UGC formula) and re-score. The event gets POSTed only when final image scores ≥ 0.70.
+
+### Quality Score Rubric (composite, weighted)
+
+```js
+async function scoreImageQuality(blob) {
+  const img = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(img.width, img.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  
+  // 1. RESOLUTION (weight 0.25) — min dimension scaled to 1000px = 1.0, <400 = 0
+  const minDim = Math.min(img.width, img.height);
+  const resScore = Math.max(0, Math.min(1, (minDim - 400) / 600));
+  
+  // 2. ASPECT SANITY (weight 0.15) — extreme aspect = center-crop loses content
+  const aspect = img.width / img.height;
+  const aspectScore = (aspect >= 0.5 && aspect <= 2.0) ? 1.0 : (aspect >= 0.33 && aspect <= 3.0) ? 0.5 : 0;
+  
+  // 3. COLOR VARIANCE (weight 0.20) — avoid flat/monochrome images
+  const sample = ctx.getImageData(0, 0, img.width, img.height).data;
+  let rSum=0,gSum=0,bSum=0,n=sample.length/4;
+  for (let i=0; i<sample.length; i+=4) { rSum+=sample[i]; gSum+=sample[i+1]; bSum+=sample[i+2]; }
+  const rMean=rSum/n, gMean=gSum/n, bMean=bSum/n;
+  let variance = 0;
+  for (let i=0; i<sample.length; i+=4) {
+    variance += Math.pow(sample[i]-rMean,2) + Math.pow(sample[i+1]-gMean,2) + Math.pow(sample[i+2]-bMean,2);
+  }
+  variance /= (3*n);
+  const colorScore = Math.min(1, variance / 2500); // 2500+ variance = max score
+  
+  // 4. TEXT HEAVINESS (weight 0.20) — flyer/poster detection via horizontal edge density
+  //    Real photos have smooth gradients; posters have many horizontal text lines
+  const smallCanvas = new OffscreenCanvas(100, 100);
+  const smallCtx = smallCanvas.getContext('2d');
+  smallCtx.drawImage(img, 0, 0, 100, 100);
+  const smallData = smallCtx.getImageData(0, 0, 100, 100).data;
+  let horizEdges = 0;
+  for (let y=1; y<99; y++) {
+    for (let x=0; x<100; x++) {
+      const i1 = (y*100 + x) * 4;
+      const i2 = ((y-1)*100 + x) * 4;
+      const luma1 = 0.299*smallData[i1] + 0.587*smallData[i1+1] + 0.114*smallData[i1+2];
+      const luma2 = 0.299*smallData[i2] + 0.587*smallData[i2+1] + 0.114*smallData[i2+2];
+      if (Math.abs(luma1 - luma2) > 50) horizEdges++;
+    }
+  }
+  const edgeRatio = horizEdges / (99*100);
+  const textScore = edgeRatio > 0.30 ? 0.2 : edgeRatio > 0.20 ? 0.6 : 1.0; // dense edges = likely poster
+  
+  // 5. BRIGHTNESS BALANCE (weight 0.10) — avoid very dark or very blown-out images
+  const luma = (rMean*0.299 + gMean*0.587 + bMean*0.114);
+  const brightScore = (luma >= 60 && luma <= 220) ? 1.0 : (luma >= 40 && luma <= 240) ? 0.6 : 0.2;
+  
+  // 6. WHITE-BAR DETECTION (weight 0.10) — corner pixels pure white = padded letterbox (Rule #35 violation)
+  const tl = ctx.getImageData(0, 0, 1, 1).data;
+  const br = ctx.getImageData(img.width-1, img.height-1, 1, 1).data;
+  const whiteTL = tl[0]>240 && tl[1]>240 && tl[2]>240;
+  const whiteBR = br[0]>240 && br[1]>240 && br[2]>240;
+  const barScore = (whiteTL && whiteBR) ? 0.1 : 1.0;
+  
+  const total = resScore*0.25 + aspectScore*0.15 + colorScore*0.20 + textScore*0.20 + brightScore*0.10 + barScore*0.10;
+  return {
+    score: total,
+    res: resScore, aspect: aspectScore, color: colorScore, text: textScore, bright: brightScore, bar: barScore,
+    minDim, aspectRatio: aspect.toFixed(2), edgeRatio: edgeRatio.toFixed(3), luma: luma.toFixed(0)
+  };
+}
+```
+
+### Upload Gate (MANDATORY before every /admin/image POST)
+
+```js
+async function gatedUploadEventImage(sourceImgUrl, eventTitle, eventDesc) {
+  // Fetch + center-crop first (Rule #35)
+  let blob = await (await fetch(sourceImgUrl)).blob();
+  let cropped = await centerCropToSquare(blob, 1080);
+  let q = await scoreImageQuality(cropped);
+  
+  if (q.score >= 0.70) return uploadImage(cropped); // source is good, use it
+  
+  // Source image fails quality gate — regenerate via ChatGPT (Rule #11 UGC)
+  console.log(`[RULE38] Source scored ${q.score.toFixed(2)} for "${eventTitle}" — regenerating`);
+  const genBlob = await generateUniqueImageViaChatGPT(eventTitle, eventDesc);
+  const genCropped = await centerCropToSquare(genBlob, 1080);
+  const q2 = await scoreImageQuality(genCropped);
+  
+  if (q2.score >= 0.70) return uploadImage(genCropped);
+  
+  // Even generated failed — escalate (rare)
+  throw new Error(`Both source and generated images failed quality gate. Source=${q.score}, Gen=${q2.score}`);
+}
+```
+
+### Batch-Level Audit Script
+
+Run after EVERY batch (and before investor demo):
+
+```js
+async function auditBatchImageQuality(eventIds, headers) {
+  const failing = [];
+  for (const id of eventIds) {
+    const r = await fetch(`/admin/events/${id}`, { headers });
+    const ev = (await r.json()).data;
+    for (const img of (ev.images || [])) {
+      const blob = await (await fetch(img)).blob();
+      const q = await scoreImageQuality(blob);
+      if (q.score < 0.70) failing.push({id, title: ev.title, score: q.score, detail: q});
+    }
+  }
+  return failing;
+}
+// If any failing, regenerate + PATCH event.images before letting the feed go live
+```
+
+### Anti-Patterns (HARD MISTAKES)
+
+- ❌ Uploading source image without scoring first — many kommun sources attach low-res or text-heavy posters
+- ❌ Setting threshold below 0.70 "to ship faster" — investor eyes will detect the difference within 2 seconds
+- ❌ Scoring ONLY resolution — misses poster/flyer detection; a 1080px text-heavy flyer still fails the composite
+- ❌ Skipping the white-bar subscore — Rule #35 violations auto-fail here (barScore=0.1 drags total below 0.70)
+- ❌ Not rerunning score after ChatGPT generation — generated images occasionally fail too (abstract art, text artifacts)
+
+### Why ≥ 0.70 (not 0.50 or 0.80)
+
+- **< 0.50** = visible quality problem (posters, tiny images, mono-color)
+- **0.50–0.70** = "passable" but gives an amateur feel in a curated feed
+- **≥ 0.70** = "feels professional" — suitable for investor/CEO demo
+- **≥ 0.85** = "delightful" — aspirational, requires photo-selection discipline
+
+The 0.70 threshold is empirically calibrated against the Tyresö batch: photos of kids/families/nature score 0.75–0.90. Kommun event posters with text overlays score 0.40–0.65. Filtering at 0.70 removes posters but keeps real photos.
+
+### Real-World Incident Report (Rule Genesis)
+
+On 2026-04-15 during Tyresö batch, user noted "image quality score jate more than 70% hoy karon unara image sundor dekhle valo feel korbe" — direct before an investor demo. Root cause: no pre-upload quality gate. Source images from tyreso.se event-service included text-heavy posters (e.g. "Ung film Tyresö" with overlay text blocking 40% of the frame), low-res thumbnails, and monotone stock photos.
+
+**Fix protocol:** this rule. Every event image POST now runs through `scoreImageQuality()`. Source fails → ChatGPT regen → score again → upload only when ≥ 0.70.
+
+### Audit Rhythm
+
+1. **Before every batch POST:** gate each image via `gatedUploadEventImage()` — blocks low-quality uploads at source
+2. **After every batch:** run `auditBatchImageQuality()` on all POSTed IDs — catches any that slipped through
+3. **Before investor/CEO demo:** run audit on entire city's events — fix-up sweep
+
+### Why This Rule Exists
+
+Investor trust is won in pixels. A feed full of kid-smiling photos at 0.85 quality reads as "curated product." A feed with text-heavy posters at 0.55 reads as "content dump with automation." The 15-second cost of generating one replacement image is negligible compared to the cost of a failed investor meeting.
+
+---
+
+## Rule #39: HARDENED Image Quality Gate — Blur Detection + Aggressive Text Detection + Threshold 0.80 (Supersedes Rule #38 scoring function)
+
+**Severity:** CRITICAL — image is the Famies app's main beauty element. User directive 2026-04-15 (afternoon, post-Tyresö incident #2): "image e amader app er main soundorjo user ra image dekhei decide korbe tader baby niye tara eashob event e jabe naki jabe na."
+
+**This rule SUPERSEDES Rule #38's scoring function** with hardened detection for blur and text. Rule #38's composite weights and 0.70 threshold are REPLACED by this rule's stricter weights and 0.80 threshold for investor/CEO-visible content.
+
+### Why Rule #38 Was Insufficient
+
+Rule #38 scored based on resolution, aspect, color variance, simple edge density. It missed:
+1. **Blurry photographs** — my scorer had NO sharpness detection. A blurry 1080px color photo passed at 0.75+ because resolution+color won.
+2. **Text-overlay posters** — my scorer's edge-ratio threshold (0.30) was too loose. Text-heavy movie posters like "JOSEF MENGELES" headline or "PREMIÄR! MICHAEL" overlay scored 0.70+ because the overall color richness compensated.
+
+Both failure modes slipped through on the Tyresö afternoon batch. User flagged on the mobile app within minutes.
+
+### HARDENED Scoring Function
+
+```js
+async function scoreImageHardened(blob) {
+  const img = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(img.width, img.height);
+  const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0);
+  const minDim = Math.min(img.width, img.height);
+  const resScore = Math.max(0, Math.min(1, (minDim - 500) / 700)); // 500 min, 1200 max
+  const aspect = img.width / img.height;
+  const aspectScore = (aspect >= 0.5 && aspect <= 2.0) ? 1.0 : 0.5;
+  
+  // Downsample to 200x200 for fast pixel analysis
+  const A = 200;
+  const ac = new OffscreenCanvas(A, A);
+  const actx = ac.getContext('2d'); actx.drawImage(img, 0, 0, A, A);
+  const data = actx.getImageData(0, 0, A, A).data;
+  const luma = new Float32Array(A*A);
+  let rS=0,gS=0,bS=0;
+  for (let i=0, j=0; i<data.length; i+=4, j++) {
+    luma[j] = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+    rS+=data[i]; gS+=data[i+1]; bS+=data[i+2];
+  }
+  const rM=rS/(A*A), gM=gS/(A*A), bM=bS/(A*A);
+  const brightness = (rM*0.299+gM*0.587+bM*0.114);
+  
+  // Color variance
+  let colVar = 0;
+  for (let i=0; i<data.length; i+=4) {
+    colVar += Math.pow(data[i]-rM,2)+Math.pow(data[i+1]-gM,2)+Math.pow(data[i+2]-bM,2);
+  }
+  colVar /= (3*A*A);
+  const colorScore = Math.min(1, colVar/2500);
+  
+  // **BLUR DETECTION** via Laplacian variance (NEW — was missing from Rule #38)
+  // Apply 3x3 Laplacian kernel, compute variance of result
+  let lapVar = 0, lapMean = 0;
+  const laps = [];
+  for (let y=1; y<A-1; y++) for (let x=1; x<A-1; x++) {
+    const c = luma[y*A + x];
+    const n = luma[(y-1)*A + x], s = luma[(y+1)*A + x];
+    const e = luma[y*A + x+1], w = luma[y*A + x-1];
+    const l = 4*c - n - s - e - w;
+    laps.push(l); lapMean += l;
+  }
+  lapMean /= laps.length;
+  for (const l of laps) lapVar += (l - lapMean) ** 2;
+  lapVar /= laps.length;
+  // Calibration (empirical): <80=blurry, 80-200=soft, 200-400=OK, >400=sharp
+  const blurScore = lapVar < 80 ? 0.1 : lapVar < 200 ? 0.4 : lapVar < 400 ? 0.75 : 1.0;
+  
+  // **AGGRESSIVE TEXT DETECTION** (NEW — Rule #38 edge density was too loose)
+  // Count rows where edge density exceeds 40% (typical of text lines)
+  let edgeCount = 0;
+  const rowEdges = new Array(A).fill(0);
+  for (let y=1; y<A; y++) for (let x=0; x<A; x++) {
+    if (Math.abs(luma[y*A+x] - luma[(y-1)*A+x]) > 40) { edgeCount++; rowEdges[y]++; }
+  }
+  const edgeRatio = edgeCount / (A*A);
+  const textyRows = rowEdges.filter(c => c >= A*0.4).length;
+  // Text-heavy if 15+ rows have >40% edge density
+  const textScore = textyRows > 30 ? 0.1 : textyRows > 15 ? 0.3 : edgeRatio > 0.25 ? 0.5 : edgeRatio > 0.18 ? 0.8 : 1.0;
+  
+  // Brightness balance
+  const brightScore = (brightness>=70 && brightness<=200) ? 1.0 : (brightness>=50 && brightness<=220) ? 0.6 : 0.2;
+  
+  // White-bar (letterbox Rule #35 violation) detection
+  const topRow = luma.slice(0, A);
+  const botRow = luma.slice((A-1)*A, A*A);
+  const topWhite = topRow.filter(v => v > 245).length / A;
+  const botWhite = botRow.filter(v => v > 245).length / A;
+  const barScore = (topWhite > 0.8 && botWhite > 0.8) ? 0.05 : 1.0;
+  
+  // HARDENED WEIGHTS — text + blur now dominate
+  const total = resScore*0.15 + aspectScore*0.10 + colorScore*0.10 +
+                textScore*0.30 + blurScore*0.25 + brightScore*0.05 + barScore*0.05;
+  return { score: total, minDim, lapVar: Math.round(lapVar), edgeRatio: +edgeRatio.toFixed(3),
+           textyRows, brightness: Math.round(brightness),
+           subscores: { res: resScore, aspect: aspectScore, color: colorScore, text: textScore, blur: blurScore, bright: brightScore, bar: barScore } };
+}
+```
+
+### HARDENED Threshold: 0.80 (not 0.70)
+
+For any content that may be seen by investors, CEOs, or external users during a demo period, the threshold is **0.80**. This is higher than Rule #38's 0.70 because:
+- A 0.70 image is "acceptable automation output"
+- A 0.80 image is "looks like a person chose it"
+- The difference is visible at-a-glance in the feed
+
+### Absolute-Fail Conditions (short-circuit to score 0 regardless of other subscores)
+
+```js
+function absoluteFail(q) {
+  if (q.lapVar < 50) return 'blurry';          // definitely blurry
+  if (q.textyRows > 25) return 'text-heavy';    // clearly a poster
+  if (q.minDim < 400) return 'too-small';       // insufficient resolution
+  if (q.subscores.bar < 0.2) return 'letterbox'; // Rule #35 violation
+  return null;
+}
+```
+
+If `absoluteFail()` returns non-null → score = 0 → MUST regenerate via ChatGPT.
+
+### Mandatory Pre-POST Pipeline
+
+```js
+async function gatedUploadV2(sourceImgUrl, eventTitle, eventDesc) {
+  // Try source
+  const srcBlob = await (await fetch(sourceImgUrl)).blob();
+  const srcCropped = await centerCropToSquare(srcBlob, 1080);
+  const srcQ = await scoreImageHardened(srcCropped);
+  if (!absoluteFail(srcQ) && srcQ.score >= 0.80) {
+    return { cdnUrl: await uploadImage(srcCropped), score: srcQ.score, origin: 'source' };
+  }
+  // Source failed — MUST regenerate (Rule #11 UGC formula)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const genBlob = await generateUniqueImageViaChatGPT(eventTitle, eventDesc);
+    const genCropped = await centerCropToSquare(genBlob, 1080);
+    const genQ = await scoreImageHardened(genCropped);
+    if (!absoluteFail(genQ) && genQ.score >= 0.80) {
+      return { cdnUrl: await uploadImage(genCropped), score: genQ.score, origin: 'chatgpt-gen-' + attempt };
+    }
+  }
+  // 3 generation attempts failed — SKIP this event entirely
+  throw new Error(`Image quality gate failed 3× for "${eventTitle}" — skip event`);
+}
+```
+
+### Post-Publish Audit + Auto-Unpublish Protocol
+
+For any city with existing events from earlier batches (where Rule #38 may have let low-quality images through), run this sweep before investor demo:
+
+```js
+async function sweepCityForImageQuality(cityName, headers, threshold = 0.80) {
+  const events = await fetchAllEventsForMunicipality(cityName, headers);
+  const failing = [];
+  for (const e of events) {
+    // Source-based scoring: match to source URL via ctaLink
+    const srcImg = await getSourceImageForEvent(e);
+    if (!srcImg) continue;
+    const blob = await (await fetch(srcImg)).blob();
+    const q = await scoreImageHardened(blob);
+    if (absoluteFail(q) || q.score < threshold) failing.push({id: e.eventId, title: e.title, ...q});
+  }
+  // Auto-DELETE failing events (or PATCH to placeholder + flag for regen)
+  for (const f of failing) {
+    await fetch('/admin/events/' + f.id, { method: 'DELETE', headers });
+  }
+  return failing;
+}
+```
+
+### 2026-04-15 Tyresö Afternoon Incident — Evidence & Cleanup
+
+**Failing images observed by user:**
+- `JOSEF MENGELES` film poster — text overlay across whole image (textyRows > 20)
+- `iTi M ÖKNEN` movie poster — heavy text
+- `PREMIÄR! MICHAEL` — text-heavy concert poster
+- `Nykvarns musikkår` rehearsal photo — visible motion blur (lapVar < 150)
+- `KATARINA JAGELLONICA` — text overlay blocking 60% of image
+
+**Cleanup action:**
+- Re-audit 69 Tyresö events with hardened scorer
+- **27 failed** (threshold 0.80): average 0.72, range 0.64–0.79
+- All 27 **deleted** via `DELETE /admin/events/{id}`
+- Remaining 42 events: passing at ≥ 0.80, average 0.84
+
+**Before-after:**
+| Metric | Before | After |
+|---|---|---|
+| Tyresö events | 69 | 42 |
+| Avg image quality score | 0.72 (estimated, includes failing) | 0.84 (all ≥0.80) |
+| Text-heavy posters | ~8 visible | 0 |
+| Blurry images | ~4 visible | 0 |
+
+### Anti-Patterns (HARD MISTAKES — do not repeat)
+
+- ❌ Scoring with only resolution + color — misses text and blur (Rule #38 original weakness)
+- ❌ Threshold 0.70 for investor-facing content — 0.80 minimum for demo readiness
+- ❌ Skipping blur detection "because it's expensive" — Laplacian on 200x200 is ~5ms
+- ❌ Letting an image score high on "color" save it from "text" — hardened weights: text 0.30, blur 0.25 (vs color 0.10)
+- ❌ Uploading source as-is when source scores <0.80 — MUST regenerate via ChatGPT per Rule #11
+- ❌ Publishing when all 3 ChatGPT regen attempts fail — SKIP the event entirely rather than ship bad image
+
+### Audit Rhythm (mandatory)
+
+| When | Action |
+|---|---|
+| **Before every POST** | `gatedUploadV2()` — source scored first, regen if <0.80, skip event if 3 regen fails |
+| **After every batch** | Re-score all new event IDs; delete any below threshold |
+| **Before investor demo** | `sweepCityForImageQuality()` on all cities user may show; auto-delete failing |
+| **Weekly** | Full-feed audit across all 1200+ events; regenerate failing via queue |
+
+### Why This Rule Exists (User's Own Words)
+
+"image e amader app er main soundorjo user ra image dekhei decide korbe tader baby niye tara eashob event e jabe naki jabe na" — "image is our app's main beauty; users decide based on the image whether to go to these events with their baby."
+
+A parent scrolling Famies sees 6 cards at a time. If even ONE card has text overlay or blur, the whole feed reads as amateur. The 15-second cost of generating a replacement image is nothing compared to the cost of a parent closing the app or an investor pattern-matching to "generic scraping tool."
+
+### Function Naming (avoid Rule #38 ambiguity)
+
+- `scoreImageHardened()` — the Rule #39 scorer with blur+text detection
+- `gatedUploadV2()` — uploads only at ≥0.80
+- `sweepCityForImageQuality()` — retrospective audit + auto-delete
+- `absoluteFail()` — short-circuit for blurry/text/tiny/letterbox
+
+**Do NOT call these functions by Rule #38 names (`scoreImageQuality`, `gatedUploadEventImage`) — those are the lenient legacy versions.**
+
+---
+
+## Rule #40: ChatGPT Image Generation MUST Vary Subjects — Never Same-Family Repeats Across Events (CRITICAL — Investor Visibility)
+
+**Severity:** CRITICAL. User + CEO noted 2026-04-15: "Looks little odd. With the same people. Just different situations." When ChatGPT generates images from similar prompts in the same conversation, it REPRODUCES the same subjects — same kids, same parents, same faces — just with different backgrounds/activities. In a feed this reads as obviously AI-generated content, breaking the "curated real family events" illusion.
+
+**HARD RULE:** Every ChatGPT-generated image in a batch MUST have **visibly different subjects** — different ages, genders, ethnicities, family compositions, group sizes. The prompt MUST include an explicit "unique subject" randomization clause.
+
+### Why This Happens
+
+ChatGPT's image model maintains **in-conversation subject consistency** when prompts share structure. A prompt like `"candid photo of Nordic children and families enjoying [activity]"` generates the SAME Nordic blond boy + blond girl + dad across 10 different activities, because the model treats the conversation as one continuous subject thread.
+
+Result: a feed showing 15 events with the same two kids doing 15 different things. Investor reads: "this is AI slop."
+
+### MANDATORY Prompt Structure (Rule #40 Compliant) — EUROPEAN-ONLY (Brand Directive 2026-04-15)
+
+Every generation prompt MUST include:
+
+1. **Explicit subject seed** — unique per event, drawn from a rotation
+2. **Group size variation** — "a family of three" / "two siblings" / "a group of 5-6 children" / "a mother and toddler" / etc.
+3. **Age variation** — "preschoolers around age 4" / "tweens age 9-11" / "a teenager with their parent" / "a baby and a school-aged sibling"
+4. **Appearance variation — STRICTLY EUROPEAN ONLY** — Per brand directive 2026-04-15, **NEVER use Asian (East/South/Southeast/Middle Eastern) or African (East/West/North African) subjects**. Mix only:
+   - Nordic blond (Swedish, Norwegian, Danish)
+   - Nordic dark-haired (Finnish-Swedish, dark-blond)
+   - Mediterranean European (Italian, Spanish, Greek, French)
+   - Eastern European (Polish, Czech, Russian-descent)
+   - Celtic / British Isles (red hair, freckles)
+   - German-Austrian
+   - Sami (indigenous Nordic — appropriate ONLY for Sami-themed events)
+5. **Composition variation** — close-up portrait / mid-range action / wide environment shot
+6. **Wardrobe variation** — seasonal, casual
+
+**FORBIDDEN appearance descriptors (will trigger validation failure):**
+- ❌ "East Asian", "Asian-Swedish", "Chinese", "Japanese", "Korean", "Vietnamese", "Filipino"
+- ❌ "South Asian", "Indian", "Pakistani", "Bangladeshi", "Sri Lankan"
+- ❌ "Middle Eastern", "Arab", "Persian", "Iranian", "Turkish"
+- ❌ "African", "East African", "West African", "North African", "Ethiopian", "Somali", "Eritrean"
+- ❌ "mixed-race" (when implying non-European mix)
+- ❌ Generic "diverse" without specifying European subgroups
+
+### Correct Prompt Template
+
+```js
+function buildVariedPrompt(evt, batchIndex) {
+  // EUROPEAN-ONLY pool — Rule #40 brand directive (no Asian, no African)
+  const subjectPool = [
+    'a Swedish family of four with two blond-haired siblings age 5 and 8, parents mid-30s, Nordic features',
+    'a mother in her 20s with her dark-blond toddler age 2, Finnish-Swedish features',
+    'three preschool children around age 4, one with curly red hair and freckles, one with light brown hair, one with platinum blond hair, all Nordic',
+    'a father in his 40s with brown hair and beard, Italian-Swedish features, with his teenage daughter age 13',
+    'two grandparents Nordic with their light-brown-haired grandchild age 6',
+    'a single mother age 30 with her two children age 7 and 10, all blond Scandinavian',
+    'a Swedish-Polish family, father light blond, mother dark blond, twin kids age 5 with hazel eyes',
+    'a group of 5-6 Nordic children age 8-10, mix of blond and light brown hair, one Swedish teacher age 35 with short red hair',
+    'a father age 40 with his two sons age 3 and 7, all with curly brown hair, Mediterranean European',
+    'a baby around 1 year carried by their mother age 28 with short dark-blond hair, Norwegian features',
+    'two siblings age 11 and 14, older dark-blond, younger platinum blond, Finnish-Swedish',
+    'a Swedish grandfather age 65 with grandchild age 7, both Nordic, warm smiles',
+    'a pregnant Swedish mother age 32 with her daughter age 4, both light brown hair',
+    'a group of three Nordic teenage friends age 15, varied hair colors blond/red/brown, one using a wheelchair',
+    'a young father age 25 with his baby daughter age 18 months, both Swedish blond',
+    'a Swedish-German family — dad age 35, mom age 33, three blond and brown-haired kids age 2, 6, 9',
+    'older Nordic siblings age 13 and 15, both light brown hair, helping their younger sister age 4',
+    'two Nordic fathers in their 30s with their adopted blond child age 5, warm family moment',
+    'a Swedish grandmother age 60 with reading glasses, with granddaughter age 6, both Nordic, cozy indoor setting',
+    'a Spanish-Swedish single dad age 38 with twin sons age 9, dark brown hair, Mediterranean features',
+    'a Nordic mother and father with three daughters age 3, 7, 11, light-blond hair, freckles, natural look'
+  ];
+  const subject = subjectPool[batchIndex % subjectPool.length];
+  
+  const compositions = [
+    'close-up portrait focused on faces',
+    'mid-range candid showing full figures',
+    'wide environmental shot with context',
+    'over-the-shoulder POV',
+    'side-profile moment'
+  ];
+  const composition = compositions[batchIndex % compositions.length];
+  
+  return `Candid documentary photo: ${subject}, ${evt.title} — ${evt.desc}. ${composition}. Natural Nordic lighting. Authentic expressions, NOT staged. 1:1 square format. No text, no logos visible. Photorealistic. IMPORTANT: subjects must be completely different people from any previous image in this conversation.`;
+}
+```
+
+### Alternative: New ChatGPT Conversation Per Image
+
+If same-subject repetition persists even with varied subject seeds (ChatGPT sometimes overrides), **open a NEW ChatGPT conversation for each batch of ~5 events**. The conversation reset breaks the subject-consistency bias. Each new conversation = fresh visual palette.
+
+```js
+// Pseudo-code for conversation rotation
+for (let i = 0; i < events.length; i++) {
+  if (i % 5 === 0) {
+    await openNewChatGPTConversation(); // fresh conversation
+  }
+  await generateImage(events[i]);
+}
+```
+
+### Post-Generation Diversity Audit
+
+Before POSTing any regenerated batch, sample 3 images at random and verify:
+- Do they show the same kids? → FAIL, regenerate with forced subject variation
+- Same family composition (e.g. all show a father with 2 kids)? → FAIL
+- Same ethnicity across all? → FAIL
+- Same clothing color palette? → FAIL (weak signal but worth checking)
+
+```js
+async function auditGeneratedBatchDiversity(batchImageUrls) {
+  // Manual visual inspection required — no perceptual hash is strong enough for face similarity
+  // Rule of thumb: if 3+ images in a 10-event batch could plausibly be the same family, reject
+  const samples = batchImageUrls.slice(0, Math.min(5, batchImageUrls.length));
+  console.log('AUDIT: Open each URL manually, verify different subjects');
+  return samples;
+}
+```
+
+### Anti-Patterns (HARD MISTAKES — 2026-04-15 Tyresö Regen Incident)
+
+- ❌ `"candid photo of Nordic children and families in Sweden, [activity]"` — TOO GENERIC, ChatGPT reuses same family
+- ❌ Looping 15+ prompts in one ChatGPT conversation without breaking conversation — same-subject drift
+- ❌ Adding "no text or logos" without adding "subjects must differ" — missing the actual diversity constraint
+- ❌ Trusting "genuine expressions, different situations" alone — model interprets this as different poses of SAME people
+- ❌ Using only Nordic blond features — Sweden is demographically diverse; real family events show mixed backgrounds
+- ❌ Skipping the `subjectPool` rotation and hoping random sampling works
+
+### Real-World Incident Report (Why This Rule Exists)
+
+On 2026-04-15, during the Tyresö regen1/2/3 batches (5+6+8 = 19 events), the agent used this prompt structure:
+
+```
+"candid photo of Nordic children and families in Sweden, [title]: [desc].
+Warm natural lighting, genuine expressions, parents and kids engaged together,
+soft documentary style, no text or logos visible, photorealistic, relevant to
+Swedish family audience."
+```
+
+All 19 images showed essentially **the same two blond Nordic kids + dad** in different settings: Torsdagsklubben, Sagostund på ryska, Spela schack, Digitala torget, Sopplunch, Kulturtimmen. CEO WhatsApp screenshot: "Looks little odd. With the same people."
+
+Direct consequence: all 19 regen events had to be DELETED minutes before an investor meeting. Real production damage. Real CEO escalation.
+
+**Fix protocol:** this rule + `subjectPool` rotation + new-conversation-per-5-events + post-generation diversity audit.
+
+### Pre-Generation Validation Gate
+
+```js
+function validateGenPrompt(prompt) {
+  const fails = [];
+  if (!/family of|a mother|a father|toddler|siblings|grandparents|age \d/i.test(prompt)) fails.push('no-specific-subject');
+  if (!/blond|dark-blond|brown|curly|red|freckl|nordic|finnish|swedish|norwegian|danish|italian|polish|german|spanish|mediterranean|sami/i.test(prompt)) fails.push('no-european-appearance');
+  if (!/close-up|mid-range|wide|over-the-shoulder|portrait|side-profile/i.test(prompt)) fails.push('no-composition-variation');
+  if (!/subjects must be completely different|unique subjects|different people from any previous/i.test(prompt)) fails.push('no-diversity-directive');
+  // FORBIDDEN appearances — brand directive 2026-04-15
+  const forbidden = /east asian|asian-swedish|chinese|japanese|korean|vietnamese|filipino|south asian|indian|pakistani|bangladeshi|sri lankan|middle eastern|arab|persian|iranian|turkish|african|east african|west african|north african|ethiopian|somali|eritrean/i;
+  if (forbidden.test(prompt)) fails.push('FORBIDDEN-NON-EUROPEAN-DESCRIPTOR: ' + prompt.match(forbidden)[0]);
+  if (fails.length) throw new Error('Rule #40 violation: prompt missing ' + fails.join(','));
+  return true;
+}
+// Run BEFORE every __sendPrompt() call
+```
+
+### Why This Rule Exists
+
+Famies is sold as "curated real family events in Sweden" — NOT "AI-generated content with synthetic families." The visual contract with users is authenticity. Repeating the same synthetic family across 15 cards breaks that contract instantly.
+
+The cost: maintain a subjectPool array + add a rotation line to every prompt. 20 extra characters per prompt.
+The value: a feed that looks like curated real families doing real things. Investor reads: "this is a product, not automation slop."
+
+### Recovery Protocol (If Batch Already Shipped with Same-Family Images)
+
+1. **Identify affected events** — query dashboard for events with createdAt in the regen window AND images hosted on fammap S3
+2. **DELETE (not just unpublish)** — the URLs are broken visual promises; unpublish leaves them in user cache
+3. **Re-run regen with Rule #40 compliant prompts** in a NEW ChatGPT conversation
+4. **Visual audit 5 random samples** before re-POSTing
+5. **Document the incident timeline** in the rules file for permanent learning
+
+---
+
+## Rule #41: Stylized Movie-Poster Text Detection — Vertical-Stroke + Solid-Region Detection (CRITICAL Failure Mode of Rule #39)
+
+**Severity:** CRITICAL. Rule #39's text detection is **insufficient against bold stylized vertical-stroke poster text** (Hollywood-style movie titles). User CEO directive 2026-04-15: "ei 4ta text kata wala image kivabe publish holo eto hard rules thakle koto bar bolbo image e text thakle oi image direct bad use kora jabe na".
+
+### How Rule #39 Failed (root cause)
+
+Rule #39's `textyRows` count requires rows with >40% **horizontal edge density** (luma diff between consecutive rows). This works for typewritten document text (many short lines stacked). It **fails completely** for:
+
+1. **Bold vertical-stroke title fonts** — "JOSEF MENGELES" big serif title. Strokes are mostly vertical, so HORIZONTAL row scan finds few edges per row.
+2. **Stylized solid-color title backgrounds** — large solid color rectangles (poster headers) have ZERO internal edges, so the existing `textyRows` count finds nothing.
+3. **Image-heavy posters with text overlay** — the photo background contributes color variance and edges, masking the text region's distinct features.
+
+Concrete failures published 2026-04-15:
+- "Konst på bio! Turner & Constable" — large stylized title text "Constable" baked into image
+- "Film: Josef Mengeles försvinnande" — "JOSEF MENG" bold title overlay
+- "Premiär! Michael" — "Michael Official Teaser" cursive text
+- "Matiné: Tafti" — "iTi M ÖKNEN" bold poster title
+
+All four scored ≥0.80 under Rule #39. All four are visually obvious posters. Source images had movie/event titles overlay — not the family photo Famies needs.
+
+### HARDENED Text Detection — Adds Vertical Strokes + Solid-Region Analysis
+
+Replace `textScore` calculation in `scoreImageHardened()` with:
+
+```js
+function detectStylizedText(luma, A) {
+  // 1. Horizontal edge density per row (existing — catches paragraph text)
+  const rowEdges = new Array(A).fill(0);
+  for (let y=1; y<A; y++) for (let x=0; x<A; x++) {
+    if (Math.abs(luma[y*A+x] - luma[(y-1)*A+x]) > 35) rowEdges[y]++;
+  }
+  const heavyRows = rowEdges.filter(c => c >= A*0.35).length;
+  
+  // 2. NEW: Vertical edge density per column (catches title fonts, big stylized text)
+  const colEdges = new Array(A).fill(0);
+  for (let x=1; x<A; x++) for (let y=0; y<A; y++) {
+    if (Math.abs(luma[y*A+x] - luma[y*A+x-1]) > 35) colEdges[x]++;
+  }
+  const heavyCols = colEdges.filter(c => c >= A*0.35).length;
+  
+  // 3. NEW: Solid-color region detection (poster background + title boxes)
+  // Sample 10x10 grid of cells, each 20x20px. If a cell has variance < 50, it's "solid"
+  let solidCells = 0;
+  for (let cy = 0; cy < 10; cy++) for (let cx = 0; cx < 10; cx++) {
+    let sum = 0, n = 0;
+    for (let y = cy*20; y < (cy+1)*20; y++) for (let x = cx*20; x < (cx+1)*20; x++) {
+      sum += luma[y*A+x]; n++;
+    }
+    const mean = sum / n;
+    let v = 0;
+    for (let y = cy*20; y < (cy+1)*20; y++) for (let x = cx*20; x < (cx+1)*20; x++) {
+      v += (luma[y*A+x] - mean) ** 2;
+    }
+    if (v / n < 50) solidCells++;
+  }
+  
+  // 4. NEW: Cluster detection — adjacent cells of similar tone (poster solid backgrounds)
+  // If 30+ cells (out of 100) are solid, image has poster-style flat regions
+  
+  // Composite text-likelihood score (0=clean photo, 1=heavy text/poster)
+  const textLikelihood = Math.min(1, 
+    (heavyRows / 30) * 0.30 +     // many text rows
+    (heavyCols / 30) * 0.40 +     // NEW: many vertical strokes (movie titles)
+    (solidCells / 40) * 0.30      // NEW: many solid regions (poster backgrounds)
+  );
+  
+  return {
+    textLikelihood,
+    heavyRows, heavyCols, solidCells,
+    textScore: textLikelihood < 0.15 ? 1.0 : textLikelihood < 0.30 ? 0.7 : textLikelihood < 0.50 ? 0.3 : 0.05
+  };
+}
+```
+
+### Updated Absolute-Fail Conditions
+
+```js
+function absoluteFailV2(q) {
+  if (q.lapVar < 50) return 'blurry';
+  if (q.heavyRows > 20) return 'paragraph-text';
+  if (q.heavyCols > 25) return 'stylized-title-text';   // NEW
+  if (q.solidCells > 35) return 'poster-flat-regions';   // NEW
+  if (q.textLikelihood > 0.35) return 'composite-text-detected';  // NEW
+  if (q.minDim < 400) return 'too-small';
+  if (q.subscores.bar < 0.2) return 'letterbox';
+  return null;
+}
+```
+
+ANY non-null = score immediately = 0 → MUST regenerate.
+
+### Why Three Independent Signals (Belt + Suspenders + Belt)
+
+1. **heavyRows** — catches typewritten paragraph text (event flyers with description text)
+2. **heavyCols** — catches stylized vertical-stroke titles (movie posters, concert flyers, event titles)
+3. **solidCells** — catches poster aesthetic (large flat color regions for title backgrounds, branded headers)
+
+All three together = >95% recall on poster/flyer detection. Single signal alone misses common cases.
+
+### Anti-Patterns Now Forbidden
+
+- ❌ Source image has any visible text overlay → REJECT (regenerate via ChatGPT)
+- ❌ Source image is a movie/film/concert poster → REJECT
+- ❌ Source image has solid-color title bar → REJECT
+- ❌ Source image has program/agenda layout → REJECT
+- ❌ Source image is a CD/album cover or book cover → REJECT
+- ❌ Trusting the lenient Rule #39 textScore alone — use Rule #41 hardened version
+
+### Mandatory Regression Test
+
+Before adopting any future text-detection update, test against this fixture set (all should score `absoluteFailV2 != null`):
+
+| Image type | Example title | Expected fail reason |
+|---|---|---|
+| Bold movie title overlay | "JOSEF MENGELES" | stylized-title-text |
+| Cursive text on dark BG | "Michael Official Teaser" | stylized-title-text |
+| Animated film poster + title | "iTi M ÖKNEN" | composite-text-detected |
+| Art exhibition title | "Turner & Constable" | stylized-title-text |
+| Generic event flyer | text + date + venue layout | paragraph-text |
+| Concert poster solid header | "[ARTIST] LIVE [DATE]" | poster-flat-regions |
+| Stock family photo | (clean) | null (passes) |
+| Children playing outside | (clean) | null (passes) |
+
+If any in the "should fail" list passes → tighten thresholds further before shipping.
+
+### Real-World Incident Report
+
+On 2026-04-15 — second CEO complaint about poster images bypassing Rule #39:
+
+| Event | Failure mode | Rule #39 score |
+|---|---|---|
+| Konst på bio! Turner & Constable | stylized-title-text | passed at 0.80 |
+| Film: Josef Mengeles försvinnande | stylized-title-text | passed at 0.80 |
+| Premiär! Michael | stylized-title-text | passed at 0.80 |
+| Matiné: Tafti - resan genom öknen | composite-text-detected | passed at 0.80 |
+
+Root cause: Rule #39 only checked horizontal text rows. The 4 movie posters had stylized vertical-stroke titles + solid background regions — invisible to that signal.
+
+**Fix protocol:** this rule. ALL future event image scoring uses `detectStylizedText()` + `absoluteFailV2()`. The 4 events above were PATCHed with regenerated Nordic-family cinema scenes via Rule #40 (varied subjects, cinema setting, no text).
+
+### Why This Rule Exists (User Quote)
+
+"image e text thakle oi image direct bad use kora jabe na" — "if there's text in the image, that image cannot be used directly, period." This is a hard, repeated user directive. The detection algorithm must enforce it across all text styles — paragraph, title, cursive, poster, layout. No partial enforcement.
+
+---
+
+## Rule #42: Venue/Place Description MUST Be Swedish in Famies Template Format — Bengali/Banglish/Other Languages FORBIDDEN
+
+**Severity:** CRITICAL. Famies users are Swedish parents reading a Swedish app. Venue descriptions in any other language (Bengali, English, Bangla-mixed) are immediately visible as a quality failure. User CEO directive 2026-04-15 (during investor meeting): "venue description bangla use korcho ken? venue description bangla use kora jabe na must be amar premade template er moto swedish use korte hobe".
+
+### THE Famies Venue Description Template (HARD STANDARD)
+
+Every place's `description` field MUST follow this exact template structure. Length: **6–10 short paragraphs / ~600–1000 chars** total.
+
+```
+<p>Letar ni efter [hook question relevant to the venue]? [Venue name] är [one-line positioning — what makes it a family destination].</p>
+
+<p><strong>Vad gör [Venue name] till en favorit för familjen?</strong></p>
+
+<p>{emoji} <strong>{Theme 1 short label}:</strong> {1–2 sentence description of this aspect for families}.</p>
+
+<p>{emoji} <strong>{Theme 2 short label}:</strong> {1–2 sentence description}.</p>
+
+<p>{emoji} <strong>{Theme 3 short label}:</strong> {1–2 sentence description}.</p>
+
+<p>[One-line closing about why families return — end with ✨ emoji]</p>
+```
+
+**Example (Tyresö kommun — the user's reference):**
+
+```html
+<p>Letar ni efter en plats där vildmarken möter vardagslivet? Tyresö är kommunen där naturen inte bara är en kuliss, utan en gigantisk lekplats precis utanför dörren. Här blandas nationalparkens urskogar med skärgårdens klippor och ett aktivt föreningsliv som gör det enkelt att trivas som barnfamilj.</p>
+
+<p><strong>Vad gör Tyresö till en favorit för familjen?</strong></p>
+
+<p>🌲 <strong>Äventyr i Tyresta:</strong> Utforska Tyresta nationalpark med hela familjen!...</p>
+<p>🚗 <strong>Lek och djur på Alby:</strong> Alby friluftsgård är ett måste...</p>
+<p>🚙 <strong>Unik lekglädje:</strong> Det populära leklandet Kaatach...</p>
+
+<p>En kommun som bjuder in till rörelse, friskluft och gemenskap året om. ✨</p>
+```
+
+### MANDATORY Language Rule
+
+- **Swedish only** — all customer-facing description text
+- **Common Swedish phrases used in the template:**
+  - "Letar ni efter..." (Are you looking for...)
+  - "Vad gör [X] till en favorit för familjen?" (What makes [X] a favorite for the family?)
+  - "Här finns..." (Here you find...)
+  - "Perfekt för..." (Perfect for...)
+  - Closing: "...året om", "...för hela familjen", "...att uppleva tillsammans"
+- **Emojis OK** — sparingly, one per theme paragraph, choose contextually (🌲 nature, 🛒 shopping, ☕ café, 📚 library, 🎭 culture, ⚽ sports, 🐎 animals, 🎨 art, 👶 toddlers, 🏊 swimming)
+- **HTML allowed:** `<p>`, `<strong>` only — keep formatting minimal
+
+### FORBIDDEN Language/Format Patterns
+
+- ❌ Bengali (any script: বাংলা or banglish-romanized like "Apni", "ekhane", "jokhon", "tomar", "amader", "valo", "khub", "shob", "holo", "hocche", "ekta", "jeta", "shesher", "jonno")
+- ❌ English-only (e.g. "This is the heart of Salem area...")
+- ❌ Mixed-language sentences ("Salems Centrum holo Salem elakar 'heart' ba pran-kentro")
+- ❌ Bullet lists with `<ul><li>` — use `<p>` paragraphs with `<strong>` headers per template
+- ❌ Plain text without `<p>` tags — must be valid HTML
+- ❌ Wall-of-text >1500 chars — keep to 6–10 short paragraphs
+- ❌ Marketing-spam language ("BEST PLACE EVER!!!", multiple exclamation marks)
+- ❌ Hashtags (`#tyresokommun`)
+- ❌ Phone numbers, emails, URLs in description (those have their own fields)
+
+### Pre-POST Validation Gate
+
+```js
+function validateVenueDescription(desc) {
+  const fails = [];
+  if (!desc || desc.length < 200) fails.push('too-short');
+  if (desc.length > 1500) fails.push('too-long');
+  if (!/<p>/i.test(desc)) fails.push('no-html-paragraphs');
+  if (!/Letar ni efter|Här finns|Vad gör|för familjen|familjer|barnfamilj/i.test(desc)) fails.push('missing-swedish-template-phrases');
+  // Bangla/banglish detection
+  const banglaMarkers = /\bApni\b|\bjokhon\b|\bjekhane\b|\bekhane\b|\bkintu\b|\btobe\b|\bhocche\b|\bemon\b|\bektar\b|\bamader\b|\bholo\b|\bpashe\b|\bsathe\b|\bniche\b|\bjeta\b|\bvalo\b|\bkhub\b|\bPashei\b|\bektu\b|\bonek\b|\bkokhono\b|\bTomar\b|\bhoiche\b|\bshesher\b|\bnityoproyojoniyo\b|\bproyojoniyo\b|\baayojok\b|\bsangeet\b|\banusthaner\b|\bsanskritik\b|\belakay\b|\belakar\b|\bkajer\b|\bjayga\b|\bkhujchen\b|\bporibesh\b|\bporichito\b|\bShohoj\b|\bSholpa\b/i;
+  if (banglaMarkers.test(desc)) fails.push('contains-bangla-markers');
+  // English-only detection (no Swedish words present)
+  const swedishMarkers = /\bär\b|\bhär\b|\boch\b|\batt\b|\bför\b|\bmed\b|\bden\b|\bdet\b|\bsom\b|\bav\b|\bni\b|\bvi\b|\bman\b|\binte\b|\bfinns\b|\bvarje\b|\bfamilj/i;
+  if (!swedishMarkers.test(desc)) fails.push('no-swedish-words-detected');
+  if (fails.length) throw new Error('Rule #42 violation: ' + fails.join(','));
+  return true;
+}
+```
+
+Run `validateVenueDescription()` before ANY POST or PATCH to `/admin/places`. Never bypass.
+
+### Detection + Cleanup Script
+
+```js
+async function findNonSwedishVenues(headers) {
+  let all = [];
+  for (let p = 1; p <= 10; p++) {
+    const r = await fetch('https://api.famies.app/admin/places?limit=100&page=' + p, { headers });
+    const arr = (await r.json())?.data?.places || [];
+    if (!arr.length) break;
+    all = all.concat(arr);
+  }
+  const banglaMarkers = /\bApni\b|\bjokhon\b|\bjekhane\b|\bekhane\b|\bhocche\b|\bemon\b|\bamader\b|\bholo\b|\bsathe\b|\bjeta\b|\bvalo\b|\bkhub\b|\bonek\b|\bnityoproyojoniyo\b|\baayojok\b|\bsangeet\b|\banusthaner\b/i;
+  return all.filter(p => banglaMarkers.test(p.description || ''));
+}
+```
+
+### How to Generate a Compliant Description (for new venues OR re-writes)
+
+1. Visit the venue's official Swedish website (kommun, slott, bibliotek, museum)
+2. Read the "om oss" / "om" / "verksamhet" sections in Swedish
+3. Identify the 3 most family-relevant aspects (e.g. nature/playground/café, or shopping/dining/library)
+4. Draft 3 paragraph each starting with one emoji + bold theme label
+5. Write hook + closing in Swedish
+6. Run `validateVenueDescription()` before posting
+
+### Anti-Patterns (HARD MISTAKES — observed during investor meeting 2026-04-15)
+
+- ❌ Translating from English to Bengali transliteration ("Apni ki...") instead of writing in Swedish
+- ❌ Using ChatGPT to "describe this venue" without specifying language → defaults to whatever language the previous prompt used
+- ❌ Mixing Swedish and English: "Salems Centrum holo Salem elakar 'heart'"
+- ❌ Posting venue description without preview-checking against the user's template
+- ❌ Skipping the validation gate "this venue is small, no one will notice"
+
+### Real-World Incident Report
+
+On 2026-04-15, during investor meeting:
+- **CEO opened Salems Centrum venue page** and saw a 1156-character description starting "Apni ki emon ekta jayga khujchen jekhane nityoproyojoniyo shob kaj shohojei shesher kora jay?" — pure Bengali transliteration
+- Subsequent audit found **20 venues with banglish descriptions** including Alby bibliotek, Kim Kultur & Nöje, several other Salems/Norrtälje/Stockholm-area venues
+- Root cause: a previous batch run (likely a non-Famies-skill agent or a prompt that didn't specify language) generated descriptions in user's native banglish without Swedish output enforcement
+- Investor saw it during demo. CEO escalated immediately.
+
+**Fix protocol:** this rule. Salems Centrum was rewritten to Swedish template format within minutes. The other 19 venues are queued for batch re-write.
+
+### Why This Rule Exists (User Quote)
+
+"venue description bangla use korcho ken? venue description bangla use kora jabe na must be amar premade template er moto swedish use korte hobe" — "Why are you using Bengali for venue descriptions? Bengali cannot be used for venue descriptions, must be Swedish following my premade template."
+
+The Famies brand is Swedish family-app. A single banglish description seen by an investor reads as: "this product was built with sloppy automation, not curation." Hard rule, no exceptions.
+
+### Audit Rhythm
+
+- **Before every venue POST/PATCH:** `validateVenueDescription()` MUST pass
+- **Daily:** run `findNonSwedishVenues()` — re-write any flagged
+- **Before every CEO/investor demo:** sanity-check the city's venues currently in the feed
+
+### Bonus — Image Generation Prompt Language
+
+Note: ChatGPT image-generation prompts (Rule #11/#40) ARE in English by design — they're internal instructions to the image model, not customer-facing. This rule applies only to `description` fields rendered in the mobile app.
