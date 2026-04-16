@@ -1,8 +1,8 @@
 ---
 name: event-publisher
-skill_version: "1.27.0"
+skill_version: "1.30.0"
 last_updated: "2026-04-16"
-rule_count: 43
+rule_count: 46
 rules_file: references/event-rules.md
 description: >
   Automated event scraping and publishing to the Famies dashboard (dashboard.famies.app).
@@ -89,18 +89,20 @@ Decide if this event belongs on Famies:
 
 When in doubt, publish — it's better to have a slightly broader selection than to miss good family events.
 
-### Step 4: Prepare the Image
+### Step 4: Prepare the Image (Rule #45 — Source First, ChatGPT Fallback)
 
-The image is what parents see first when scrolling. It must feel family-relevant. Read `references/image-rules.md` for the complete image decision tree. The short version:
+The image is what parents see first when scrolling. It must feel family-relevant. **CRITICAL: ALWAYS try the source image FIRST before generating via ChatGPT.** Read `references/event-rules.md` Rule #45 for the full pipeline. The short version:
 
-1. **Source has a good family-friendly image** (shows kids/families engaging) → Use it
-2. **Source image is text-heavy** (poster, flyer, banner with prominent text) → Generate new image via ChatGPT
-3. **Source image is generic** (just a flag, landscape, bird, object — no family connection) → Generate new image via ChatGPT
-4. **Multiple events share the same image** → Keep original on one, generate unique images for others
-5. **No image provided** → Generate via ChatGPT
-6. **Source image is good but not 1:1 friendly** → Generate new image via ChatGPT
+1. **FIRST: Fetch the source image** from the event detail page (og:image, article img, hero bg)
+2. **Score it** with Rule #39 quality gate (blur + text + overall ≥ 0.80)
+3. **If passes** → center-crop (Rule #35) → upload to CDN → DONE (no ChatGPT needed)
+4. **If fails** (text-heavy, blurry, generic, no family connection) → generate via ChatGPT
+5. **No image on source page** → Generate via ChatGPT
+6. **Multiple events share the same image** → Keep original on one, generate unique images for others
 
-When generating images, use this prompt format in ChatGPT:
+ChatGPT is the FALLBACK, not the default. Most source images (~60-70%) pass the quality gate.
+
+When generating images (fallback only), use this prompt format in ChatGPT:
 ```
 authentic vertical 1:1 photo of Nordic children/families [engaging with the event activity in a way that feels warm and relevant to parents browsing a family events app]
 ```

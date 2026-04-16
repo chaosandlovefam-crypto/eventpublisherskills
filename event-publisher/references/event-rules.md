@@ -2692,3 +2692,400 @@ When the verifyServerImage() check confirms the server is correct, share this wi
 Trust failure cycle: user reports → agent fixes → user reports same issue → agent fixes again (wasted) → user loses trust. The verifyServerImage() step breaks the cycle by checking ground truth FIRST.
 
 For a 1500+ event production app with multiple users, the difference between "verified server bad" and "user's mobile cache" is the difference between an hour of regen work and a 30-second cache-clear instruction.
+
+---
+
+## Rule #44: COMPLETE COVERAGE — NEVER Skip Sources, NEVER Skip Pages, NEVER Skip Single-Event Sources (CRITICAL — Supersedes Rule #19 Skip Behavior)
+
+**Severity:** CRITICAL. User directive 2026-04-16: "no skip rules update kore aro perfectly kajta ses kore amake report daw" — "update no-skip rules and complete the work perfectly." Repeated explicitly: "ekta source link e jodi only 1ta unique event o pawa jay seta o publish korba mandatory tai no skip" — "if a source link yields even just 1 unique event, you MUST publish it. No skip."
+
+### THE Hard No-Skip Rule
+
+1. **Every source URL from the master spreadsheet (Rule #23) MUST be processed** — no source-level skip based on "low yield prediction"
+2. **Every page within a multi-page calendar MUST be paginated** — never stop at page 7 when there are 12 pages
+3. **Single-event sources are NOT skippable** — even 1 unique gem-event from a source justifies the source
+4. **No "this source seems redundant" pre-filtering** — let the dedup check (Rule #36 grouping + title-norm comparison) decide what's actually duplicate
+5. **No "this is low-priority" pruning** — every event in the source feed gets processed through the full pipeline
+
+### What Rule #19 Said (now SUPERSEDED for skip semantics)
+
+Rule #19 historically suggested removing low-yield sources from spreadsheets after audit. **That removal step is now FORBIDDEN.** The audit signal is for prioritization order (process kommun primary first, FB last) — NOT for skipping.
+
+Rule #19 still applies for:
+- Identifying obviously-broken sources (Cloudflare 403, login walls — these literally cannot be scraped)
+- Logging audit results for spreadsheet maintenance
+- Detection of dead links
+
+Rule #19 NO LONGER applies for:
+- ❌ Removing single-event sources
+- ❌ Skipping past-event-only sources without first checking for any future events
+- ❌ Treating "low yield" as a reason to exclude
+
+### What Rule #18 Said (clarified — past-events skip is per-event, not per-source)
+
+Rule #18 (skip past events) is per-EVENT, not per-source. A source listing 95% past events still gets processed for the 5% future events. Never skip the source.
+
+### Pagination Mandate
+
+Every paginated calendar MUST be fully harvested:
+
+```js
+async function harvestAllPages(maxPages = 100) {
+  const allEvents = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const btn = findPageButton(page);
+    if (!btn) {
+      // Verify this is the actual end, not a missed button
+      const visiblePages = countVisiblePageButtons();
+      if (page > visiblePages + 2) break; // safe to assume end
+      // Try alternative selectors before giving up
+      const altBtn = findPageByText(page) || findNextButton();
+      if (!altBtn) break;
+      altBtn.click();
+    } else {
+      btn.click();
+    }
+    await sleep(3000); // generous wait for SPA hydration
+    const cards = harvestEventCardsFromDOM();
+    if (cards.length === 0) break; // truly no more
+    allEvents.push(...cards);
+  }
+  return dedupByUrl(allEvents);
+}
+```
+
+**FORBIDDEN:** `if (page > 7) break;` — never hard-cap pagination based on assumption.
+
+**REQUIRED:** Verify pagination is actually exhausted before moving on:
+- Check pagination component for "Next" button state (disabled = end)
+- Compare totalHits from API/JSON state vs harvested count
+- Log pages skipped if any (so they can be retried)
+
+### Pre-Source Audit (now informational, not gating)
+
+Before processing a city's sources:
+
+```js
+async function reportAllSourceCoverage(citySources) {
+  const report = [];
+  for (const src of citySources) {
+    const result = await scrapeSource(src);
+    report.push({
+      url: src,
+      reachable: result.reachable,
+      eventsFound: result.events?.length || 0,
+      uniqueAfterDedup: result.unique?.length || 0,
+      action: 'process' // ALWAYS process, never skip
+    });
+  }
+  console.log('Source coverage:', report);
+  return report;
+}
+```
+
+The `action` is ALWAYS `'process'`. Rule #19 audit removed → just visibility into yield, not gating.
+
+### Unreachable Source Handling
+
+If a source is truly unreachable (Cloudflare 403, login wall, dead domain):
+1. Log the failure with details
+2. Move to next source (don't crash batch)
+3. Add to retry queue with note: "needs login OR proxy OR alternative"
+4. Report at end: "Source X unreachable — flagged for manual followup"
+
+Do NOT silently drop. Do NOT mark as "skipped intentionally."
+
+### Anti-Patterns (HARD MISTAKES — observed 2026-04-16 Tyresö Session)
+
+- ❌ "Tyresoslott has only 1 event — Rule #19 skip" — VIOLATION, that 1 event must be published
+- ❌ "Tyresocentrum mostly past events — skip" — VIOLATION, must check for any future events first
+- ❌ "Tyresta nationalpark has no dated events — skip" — partially OK (no events = nothing to publish), BUT must verify EXHAUSTIVELY (different page sections, embedded calendars, downloadable ICS) before declaring zero events
+- ❌ "Pagination broke at page 7, 60 events is substantial — proceed" — VIOLATION of pagination mandate, MUST retry/fix pagination to harvest pages 8-12
+- ❌ Removing rows from master spreadsheet (Google Sheet) based on audit — VIOLATION, the spreadsheet is the user's curated source list, not Claude's
+
+### Real-World Incident Report
+
+On 2026-04-16, during Tyresö completion + Huddinge attempt:
+- **Tyresö**: agent skipped tyresoslott (1 event), tyresocentrum (called "past-only" without exhaustive check), tyresta nationalpark (declared "no events" without trying alternative pages)
+- **Huddinge**: agent declared harvest "done" at 60/119 events (only 7 pages of 12 paginated). This left ~50% of events unpublished
+- User pushback: "tomi kivabe decide kore 4-5 page skip korle somossa nai" (how can you decide 4-5 pages can be skipped without issue?)
+- Lesson: agent's "what's worth publishing" judgment was OVER-CALLED. The rule is: PUBLISH EVERYTHING that's a real future family-relevant event, no agent-level pruning
+
+**Fix protocol:** this rule + automated retry on pagination failure + complete-coverage report at end of each city showing source-by-source published count.
+
+### Mandatory End-of-City Report
+
+After every city batch, the report MUST include:
+
+```
+City: Huddinge
+- Source 1 (huddinge.se kommun): 119 events found, 87 published (32 dedup-skips), 0 senior-skips, 0 pagination-failures
+- Source 2 (bibliotek.huddinge.se): 18 events found, 4 published (14 dedup-skips), 0 failures
+- Source 3 (huddingekulturhus.se): 5 events found, 5 published, 0 failures
+- Source 4 (svenskakyrkan.se filtered Huddinge): 12 events found, 9 published (1 senior-skip, 2 ChatGPT-policy-fail), 0 failures
+- Source 5 (huddinge.se culture pages): 0 events found (static page, no calendar), no action needed
+- TOTAL: 154 source events → 105 published, 49 dedup, 1 senior, 2 ChatGPT-fail
+- Pagination integrity: 100% of pages processed
+- Source coverage: 5/5 attempted (100%)
+```
+
+Without this report, the city is NOT considered done.
+
+### Why This Rule Exists
+
+The user's investment: hours of training the skill + curating the master spreadsheet + reviewing every batch output. When the agent makes "skip" decisions, it overrides the user's curation work and creates blindspots in the feed that user can't easily detect ("which sources got dropped?").
+
+The Famies app's value proposition is COMPREHENSIVE local family event coverage. A feed missing 50% of a city's events because the agent stopped paginating early breaks that promise.
+
+The cost of processing every page + every event is just bot time. The cost of missing events is user trust + investor demo gaps + lost feed completeness.
+
+### Audit Question (run after every city)
+
+"Did I process EVERY source URL from the spreadsheet, EVERY page from each calendar, and EVERY future event from each page?" If no → not done. Report exactly what was missed and why.
+
+---
+
+## Rule #45: SOURCE IMAGE FIRST — ChatGPT Generation is FALLBACK ONLY (CRITICAL — Pipeline Order Rule)
+
+**Added:** 2026-04-16 (v1.29.0)
+**Severity:** CRITICAL. This rule defines the mandatory image acquisition order for EVERY event in EVERY batch. Violating this rule wastes 3-4x more time per batch (unnecessary ChatGPT generation) and produces less authentic feeds (AI-generated images when real event photos exist).
+
+### The Iron Rule
+
+For every event, images MUST be acquired in this exact order:
+
+1. **FIRST: Try the source image** from the event detail page
+2. **Score it** with the Rule #39 hardened quality gate (blur variance + text density + quality ≥ 0.80)
+3. **If passes** → use it directly (center-crop per Rule #35, upload to Famies CDN per Rule #22) — **NO ChatGPT needed**
+4. **If fails** (text-heavy, blurry, generic, no-family-connection, no image at all) → **THEN and ONLY THEN** generate via ChatGPT (Rule #40 European-only subject pool, Rule #11 UGC 5-ingredient formula)
+
+```
+SOURCE IMAGE → Score → Pass (≥0.80)? → YES → center-crop → upload → DONE
+                                      → NO  → ChatGPT generate → center-crop → upload → DONE
+```
+
+### Implementation Pattern
+
+```js
+async function acquireEventImage(eventDetailUrl, eventTitle, tabId, headers) {
+  // STEP 1: Try source image FIRST
+  const sourceImgUrl = await extractSourceImage(eventDetailUrl, tabId);
+  
+  if (sourceImgUrl) {
+    // STEP 2: Fetch and score source image
+    const sourceBlob = await fetchImageBlob(sourceImgUrl);
+    if (sourceBlob) {
+      const score = await scoreImageQuality(sourceBlob); // Rule #39 scorer
+      
+      if (score.overall >= 0.80 && !score.isTextHeavy && !score.isBlurry) {
+        // STEP 3a: Source image passes — USE IT
+        const cropped = await centerCropToSquare(sourceBlob, 1080); // Rule #35
+        const cdnUrl = await uploadToFamiesCDN(cropped, headers);   // Rule #22
+        return { 
+          url: cdnUrl, 
+          source: 'original', 
+          score: score.overall,
+          chatgptUsed: false 
+        };
+      }
+      // Source image failed quality gate — log reason and fall through
+      console.log(`Source image failed: score=${score.overall}, text=${score.isTextHeavy}, blur=${score.isBlurry}`);
+    }
+  }
+  
+  // STEP 3b: Source image missing or failed — FALLBACK to ChatGPT
+  const generatedBlob = await generateViaChatGPT(eventTitle); // Rule #40 + #11
+  const cropped = await centerCropToSquare(generatedBlob, 1080);
+  const cdnUrl = await uploadToFamiesCDN(cropped, headers);
+  return { 
+    url: cdnUrl, 
+    source: 'chatgpt', 
+    score: null,
+    chatgptUsed: true 
+  };
+}
+```
+
+### Source Image Extraction
+
+Every event detail page should be checked for images in this order:
+
+```js
+async function extractSourceImage(eventUrl, tabId) {
+  // 1. Look for og:image meta tag
+  const ogImage = await evalInTab(tabId, `
+    document.querySelector('meta[property="og:image"]')?.content
+  `);
+  if (ogImage && !isPlaceholder(ogImage)) return ogImage;
+  
+  // 2. Look for main event image in article/content area
+  const mainImg = await evalInTab(tabId, `
+    const selectors = [
+      'article img', '.event-image img', '.event-detail img',
+      '.content-area img', '.entry-content img', 'main img',
+      '[class*="event"] img', '[class*="image"] img'
+    ];
+    for (const sel of selectors) {
+      const img = document.querySelector(sel);
+      if (img && img.naturalWidth >= 300) return img.src;
+    }
+    null
+  `);
+  if (mainImg) return mainImg;
+  
+  // 3. Look for background-image on hero/banner
+  const bgImg = await evalInTab(tabId, `
+    const heroes = document.querySelectorAll('[class*="hero"], [class*="banner"], [class*="header-image"]');
+    for (const el of heroes) {
+      const bg = getComputedStyle(el).backgroundImage;
+      if (bg && bg !== 'none') return bg.replace(/url\\(["']?/, '').replace(/["']?\\)/, '');
+    }
+    null
+  `);
+  if (bgImg) return bgImg;
+  
+  // 4. API/JSON response may include imageUrl field
+  // (check during event data extraction, not here)
+  
+  return null; // No source image found → ChatGPT fallback
+}
+
+function isPlaceholder(url) {
+  // Filter out generic placeholder/default images
+  const placeholderPatterns = [
+    'placeholder', 'default', 'no-image', 'noimage',
+    'fallback', 'generic', 'logo-only', '1x1.gif'
+  ];
+  return placeholderPatterns.some(p => url.toLowerCase().includes(p));
+}
+```
+
+### Batch Tracking
+
+Every batch MUST track image source statistics:
+
+```js
+const imageStats = {
+  sourceUsed: 0,      // Source image passed quality gate
+  sourceFailed: 0,    // Source image existed but failed gate
+  sourceNotFound: 0,  // No source image on event page
+  chatgptGenerated: 0 // ChatGPT used as fallback
+};
+
+// After each event:
+if (result.chatgptUsed) {
+  imageStats.chatgptGenerated++;
+  if (hadSourceImage) imageStats.sourceFailed++;
+  else imageStats.sourceNotFound++;
+} else {
+  imageStats.sourceUsed++;
+}
+
+// End-of-batch report MUST include:
+// "Images: 38 source (73%), 14 ChatGPT (27%) — 5 source-failed, 9 no-source"
+```
+
+### Why This Rule Exists — The Huddinge Incident
+
+On 2026-04-16, during the Huddinge city batch (52 events), the agent sent ALL 52 events to ChatGPT for image generation. In reality:
+- Huddinge kommun's event detail pages DID have source images for ~60-70% of events
+- Many of those source images were perfectly good family-relevant photos (kids at library events, family swimming, etc.)
+- The agent never even attempted to fetch or score the source images
+- Result: 52 ChatGPT generations × ~30 seconds each = ~26 minutes wasted on unnecessary image generation
+- With this rule: ~15 ChatGPT generations × 30s = ~7.5 minutes — a 3.5x speedup
+- User feedback: "ekta question huddinge kono event source e ki kono image nai? jekarone 52tar modde ekebare 52tai chatgpt diye generate korte hobe?" → "Does Huddinge have no images? Why generate all 52 via ChatGPT?"
+- Root cause: No rule explicitly mandated trying source images first. The agent defaulted to ChatGPT for everything.
+
+### Anti-Patterns (HARD MISTAKES)
+
+- ❌ Skipping source image check entirely and going straight to ChatGPT
+- ❌ Checking source image existence but not scoring it (assuming all source images are bad)
+- ❌ Using source image without scoring (bypassing Rule #39 quality gate)
+- ❌ Batch-generating all ChatGPT images upfront before checking any source images
+- ❌ Treating ChatGPT as the "default" and source images as "optional optimization"
+
+### Correct Mental Model
+
+```
+ChatGPT = expensive fallback (30s per image, rate limits, content policy blocks)
+Source   = free, instant, authentic (0.5s per image, no rate limits, real photos)
+
+ALWAYS try the free/instant/authentic option first.
+```
+
+### Interaction With Other Rules
+
+- **Rule #4 (Image Assessment)**: Still applies — but the FIRST image assessed should be the source image
+- **Rule #35 (Center-Crop)**: Applies to BOTH source and ChatGPT images
+- **Rule #37 (Unique Images)**: Source images are inherently unique per event — no collision risk
+- **Rule #38/39 (Quality Gate)**: The scorer is the gatekeeper — source images that fail get replaced by ChatGPT
+- **Rule #40 (European Subject Pool)**: Only applies to ChatGPT-generated images (source images have real people)
+- **Rule #41 (Stylized Text Detection)**: Applies to source image scoring — text-heavy source images trigger ChatGPT fallback
+
+### Audit Question (run after every batch)
+
+"For how many events did I try the source image first? For how many did I skip straight to ChatGPT?" If chatgptGenerated > sourceUsed + sourceFailed, something is wrong — the agent likely skipped source image checks.
+
+---
+
+## Rule #46: Session-Start HARD GATE — Reload Rules File + Run Rule #15 Integrity Check BEFORE Any Work (CRITICAL — Supersedes Agent Initiative)
+
+**Added:** 2026-04-16 (v1.30.0)
+**Severity:** CRITICAL. Violating this rule is the root cause of cross-session amnesia bugs — the agent proceeds with stale assumptions, skips Rule #45 source-first image pipeline, picks arbitrary stock photos, and ruins already-clean cities (e.g., Huddinge 2026-04-16 first publish run: 61 events published with duplicate Unsplash stock photos because the agent never loaded Rule #45 or ran Rule #15 integrity first).
+
+### The Iron Rule
+
+**On EVERY new Claude session (or continuation from context compaction), the FIRST action — before reading user intent, before touching any tab, before any other tool call related to Famies — MUST be:**
+
+1. **Reload the rules file** — Read `event-publisher/references/event-rules.md` in full.
+2. **Reload the SKILL.md frontmatter** — Read `event-publisher/SKILL.md`.
+3. **Run Rule #15 integrity check** — grep `^## Rule #` count must equal `rule_count` in frontmatter.
+4. **Show the result to the user** — "Skill integrity OK — N rules loaded" or "Integrity FAILED — M found vs N expected".
+5. **ONLY after a PASS** → proceed with the user's requested work.
+
+If integrity fails → STOP. Do not proceed. Tell the user and wait for their direction.
+
+### Why This Rule Exists (Beyond Rule #15)
+
+Rule #15 DEFINES the integrity check. Rule #46 ENFORCES it as the absolute first action of every session with no exceptions:
+
+- Rule #15 alone was insufficient — the agent rationalized skipping it when the user's opening message felt urgent ("lets go asap") or when continuing from a compacted summary that seemed to already contain the rules.
+- Context compaction is a NEW-SESSION-EQUIVALENT event. The compacted summary is NOT a substitute for reloading the actual rules file — compaction can drop rule details while preserving task continuity, making the agent confidently wrong.
+- Rule #46 removes the agent's discretion to "skip this once because I remember the rules". Memory is not real; the file is real.
+
+### Triggering Events (when Rule #46 applies)
+
+- First message of a brand-new conversation session.
+- First message after `<summary>` block from context compaction.
+- First message after the browser tab group was closed and recreated mid-session.
+- First message after the user indicates they re-logged into the dashboard or any auth state reset.
+- Any moment the agent realizes its `window.__*` scratchpad variables are missing and needs to rehydrate — that's evidence of session-state loss and triggers a fresh integrity check.
+
+### Mandatory Integrity Preamble Format
+
+The agent's response MUST begin with this preamble (before any other tool calls or city work):
+
+```
+Rule #46 session-start check:
+- Read event-rules.md: [N rule headers counted]
+- Read SKILL.md frontmatter: rule_count = [N]
+- Integrity: [PASS / FAIL]
+[If PASS:] Proceeding with [user's task]...
+[If FAIL:] STOP — reconcile required before any work.
+```
+
+### Interaction With Other Rules
+
+- **Supersedes** any instinct to "just start the task" when the user seems urgent.
+- **Reinforces** Rule #15 — makes it un-skippable.
+- **Prevents Rule #45 violations** — if you don't reload Rule #45, you forget source-first pipeline and default to Unsplash/stock photos.
+- **Prevents Rule #34 violations** — Instant-Start rule says no asking, but Instant-Start STILL requires Rule #46 preamble first (it takes ~2 seconds).
+- **Bypasses only in** — purely conversational replies (no tool calls, no file/event work). If the reply does not touch events/images/places/orgs, Rule #46 is not required.
+
+### Audit Question (run at the END of every session with work done)
+
+"Did my first tool call of this session produce the Rule #46 preamble, and did it show a PASS? If no, every piece of work done this session is suspect and should be audited against the reloaded rules."
+
+### Root Cause of the Rule (Huddinge 2026-04-16 Incident)
+
+The agent restarted from a compacted summary, assumed the rules were "already loaded" because the summary mentioned Rule #45, and proceeded to publish 61 Huddinge events with arbitrary Unsplash stock photos — violating Rule #45 (source-first), Rule #37 (unique images — 3 dupes slipped through initial pool), and Rule #38/39 (quality gate never ran). If Rule #46 had been in place, the agent would have reloaded event-rules.md, seen Rule #45 in full, and followed the source-first pipeline from the first event. Rule #46 is specifically engineered so this exact failure pattern cannot recur.
