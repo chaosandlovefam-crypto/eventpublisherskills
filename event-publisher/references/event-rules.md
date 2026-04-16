@@ -2593,3 +2593,102 @@ The Famies brand is Swedish family-app. A single banglish description seen by an
 ### Bonus — Image Generation Prompt Language
 
 Note: ChatGPT image-generation prompts (Rule #11/#40) ARE in English by design — they're internal instructions to the image model, not customer-facing. This rule applies only to `description` fields rendered in the mobile app.
+
+---
+
+## Rule #43: Mobile Cache vs. Server-Truth Verification — ALWAYS Inspect S3 Image Directly Before Re-Fixing
+
+**Severity:** HIGH (workflow efficiency + trust). User screenshots from mobile app are NOT ground truth — the Famies mobile app caches event images locally and may show OLD images even after backend has been updated. Re-fixing already-correct events wastes ChatGPT credits, time, and creates duplicate-image risk.
+
+### The Caching Failure Mode
+
+Mobile apps (especially React Native + image libs) cache fetched image URLs aggressively for:
+- Faster scroll performance
+- Offline support
+- Bandwidth savings
+
+When backend `images[]` is PATCHed with a new S3 URL:
+- ✅ Server has new URL
+- ✅ Dashboard web UI shows new image (browser doesn't cache aggressively)
+- ❌ Mobile app continues to show OLD image until: cache cleared, app force-stopped, OR new event ID assigned
+
+User screenshots showing OLD image after a fix can mean:
+1. **Mobile cache** (most common) — server is correct, just need to refresh
+2. **Backend PATCH didn't save** (rare but possible) — server still has old URL
+3. **Original POST had wrong image** (worst case) — actual S3 image is bad
+
+### MANDATORY Verification Protocol Before Re-Fixing
+
+When user reports "this image is still bad" via mobile screenshot:
+
+```js
+async function verifyServerImage(eventId, headers) {
+  // Step 1: Get current server-side image URL
+  const r = await fetch(`https://api.famies.app/admin/events/${eventId}`, { headers });
+  const ev = (await r.json()).data;
+  const imgUrl = ev.images?.[0];
+  
+  console.log('SERVER IMAGE URL:', imgUrl);
+  console.log('UPLOADED:', ev.createdAt, 'UPDATED:', ev.updatedAt);
+  
+  // Step 2: Fetch the image and visually verify by opening URL
+  // (Open in browser tab and screenshot — this is what mobile WILL show after cache clear)
+  return imgUrl;
+}
+```
+
+**Then open the URL directly in a browser tab + screenshot it.**
+
+If the **server image is correct** but mobile shows old → tell user to clear app cache / force-stop / re-login. DO NOT regenerate.
+
+If the **server image is also bad** → only then regenerate.
+
+### Pre-Reply Checklist
+
+Before responding to "this image is still showing problem":
+1. ☐ Did I fetch the current event from `/admin/events/{id}`?
+2. ☐ Did I open the `images[0]` S3 URL in a browser tab and screenshot it?
+3. ☐ Is the server image actually bad, or is it the mobile cache?
+4. ☐ If server is correct → reply with cache-clear instructions, NOT another regen attempt
+
+### Anti-Patterns (HARD MISTAKES — observed 2026-04-16)
+
+- ❌ Trusting mobile screenshots as ground truth without verifying server state
+- ❌ Re-generating ChatGPT images for events that already have correct images on server
+- ❌ Wasting ChatGPT image credits on phantom problems
+- ❌ Creating risk of duplicate images (Rule #37 violation) by re-uploading "fixes" to already-fixed events
+- ❌ Not telling user about mobile cache when relevant
+
+### When to Apply This Rule
+
+**Always run verifyServerImage() FIRST** when user complains about an image after you've already fixed it once in the same session. Especially when:
+- Time has passed (mobile cache TTL is typically 24h)
+- The reported problem is identical to before
+- Multiple events show the "same" issue (cache poisoning across feed)
+- User shows screenshot from same mobile session as a previous complaint
+
+### Real-World Incident Report
+
+On 2026-04-16, Tyresö batch:
+- User reported 4 text-heavy poster images on mobile feed at 2:04 AM (Konst på bio, Josef Mengele, Premiär Michael, Matiné Tafti)
+- Agent re-generated all 4 events with fresh ChatGPT Nordic family cinema scenes (00:11–00:16 server time)
+- User showed screenshot AGAIN at same 2:04 timestamp claiming images STILL bad
+- Agent verification by opening S3 URL directly → server images were ALREADY perfect (popcorn-eating siblings, laughing red-haired mom + bearded dad + blond teen)
+- Root cause: Mobile app cached old image URLs from BEFORE the server fix; new URLs needed force-stop / cache-clear to load
+
+**Outcome:** Saved ~3 unnecessary regenerations, ~10 min of ChatGPT credits, and confusion. User instructed to clear app cache.
+
+### Force-Refresh Instructions for User (Famies Mobile App)
+
+When the verifyServerImage() check confirms the server is correct, share this with user verbatim:
+
+> Mobile app showing old image is cache. To force fresh fetch:
+> - **Android:** Settings → Apps → Famies → Storage → Clear Cache. Reopen app.
+> - **iOS:** Force-quit (swipe up + away). Reopen.
+> - **Both:** Logout and login again — guarantees fresh data fetch.
+
+### Why This Rule Exists
+
+Trust failure cycle: user reports → agent fixes → user reports same issue → agent fixes again (wasted) → user loses trust. The verifyServerImage() step breaks the cycle by checking ground truth FIRST.
+
+For a 1500+ event production app with multiple users, the difference between "verified server bad" and "user's mobile cache" is the difference between an hour of regen work and a 30-second cache-clear instruction.
